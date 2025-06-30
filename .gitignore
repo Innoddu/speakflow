@@ -1,0 +1,358 @@
+# SpeakFlow - Git Ignore File
+
+# ===== 환경 변수 및 보안 파일 =====
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+
+# AWS 자격증명
+.aws/
+aws-credentials.json
+*accessKeys.csv
+*_accessKeys.csv
+speakflow-user_accessKeys.csv
+
+# Xcode 환경 파일
+mobile/ios/.xcode.env.local
+.xcode.env.local
+
+# ===== Node.js =====
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+# Grunt intermediate storage
+.grunt
+
+# Bower dependency directory
+bower_components
+
+# node-waf configuration
+.lock-wscript
+
+# Compiled binary addons
+build/Release
+
+# Dependency directories
+jspm_packages/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Microbundle cache
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# parcel-bundler cache
+.cache
+.parcel-cache
+
+# Next.js build output
+.next
+
+# Nuxt.js build / generate output
+.nuxt
+dist
+
+# Gatsby files
+.cache/
+public
+
+# Storybook build outputs
+.out
+.storybook-out
+
+# ===== React Native / Expo =====
+# Expo
+.expo/
+.expo-shared/
+dist/
+web-build/
+
+# React Native
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+*.orig.*
+
+# Metro
+.metro-health-check*
+
+# Flipper
+ios/Pods/
+ios/build/
+android/app/build/
+android/build/
+android/.gradle/
+
+# iOS 빌드 관련
+mobile/ios/Pods/
+mobile/ios/build/
+mobile/ios/*.xcworkspace/xcuserdata/
+mobile/ios/*.xcodeproj/xcuserdata/
+mobile/ios/Podfile.lock
+
+# Android 빌드 관련
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/.gradle/
+mobile/android/local.properties
+
+# ===== 운영체제 =====
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.tmp
+*.temp
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ===== IDE / 에디터 =====
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# Cursor
+.cursor/
+
+# JetBrains IDEs
+.idea/
+*.swp
+*.swo
+*~
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+
+# ===== 프로젝트 특화 =====
+# 오디오 파일 (용량이 클 수 있음)
+backend/public/audio/*.webm
+backend/public/audio/*.mp3
+backend/public/audio/*.wav
+backend/public/audio/*.m4a
+backend/public/audio/*_temp.*
+public/audio/
+*/public/audio/
+
+# 업로드 및 임시 파일
+backend/uploads/
+backend/cache/
+backend/data/
+
+# Python 관련
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+
+# Expo 특화 (mobile 폴더)
+mobile/.expo/
+mobile/dist/
+mobile/web-build/
+mobile/expo-env.d.ts
+.expo-shared/
+
+# React Native 특화
+mobile/.kotlin/
+android/app/src/main/assets/
+android/app/src/main/res/drawable-*
+ios/build/
+android/build/
+android/app/build/
+android/.gradle/
+.gradle/
+
+# Metro bundler cache
+mobile/.metro-health-check*
+.metro-health-check*
+
+# TypeScript
+mobile/*.tsbuildinfo
+backend/*.tsbuildinfo
+
+# 로그 파일
+*.log
+logs/
+backend/logs/
+mobile/logs/
+
+# 백업 파일
+*.backup
+*.bak
+*.old
+
+# 임시 파일
+tmp/
+temp/
+.tmp/
+
+# 데이터베이스 파일
+*.db
+*.sqlite
+*.sqlite3
+
+# 테스트 결과
+test-results/
+coverage/
+
+# 빌드 결과물
+build/
+dist/
+out/
+
+# 스크립트 실행 결과 및 임시 파일
+backend/scripts/tests/results/
+backend/scripts/aws-setup/results/
+*.result
+*.output
+
+# 디바이스 정보
+mobile/.expo/devices.json
+devices.json
+
+# 패키지 매니저 캐시
+.yarn/
+.pnp.*
+yarn.lock
+pnpm-lock.yaml
+
+# 대용량 파일들
+*.webm
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# 캐시 데이터
+cache/
+.cache/
+*/cache/
+
+# 사용자 데이터
+*/data/history/
+user_history.json
+
+# Railway 배포 관련
+.railway/
+
+# ===== 문서 및 기타 =====
+# 개발 중 메모
+TODO.md
+NOTES.md
+SCRATCH.md
+
+# 스크린샷 (개발용)
+screenshots/
+*.png
+*.jpg
+*.jpeg
+*.gif
+!docs/**/*.png
+!docs/**/*.jpg
+!docs/**/*.jpeg
+!docs/**/*.gif
+
+# ===== 예외 (추가할 파일들) =====
+# 예시 환경 변수 파일은 포함
+!.env.example
+!backend/.env.example
+
+# README와 문서는 포함
+!README.md
+!docs/
+
+# 패키지 관리 파일은 포함
+!package.json
+!package-lock.json
+!yarn.lock 
