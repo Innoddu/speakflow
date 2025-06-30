@@ -3,7 +3,7 @@ export const API_CONFIG = {
   // Change this to your backend server URL
   // For local development: Use your computer's IP address
   // For production: 'https://your-backend-domain.com/api'
-  BASE_URL: 'http://localhost:5030/api',
+  BASE_URL: 'https://speakflow-production.up.railway.app/api',
   
   // API timeout in milliseconds
   TIMEOUT: 120000, // Increased to 120 seconds for audio conversion
