@@ -2,7 +2,6 @@ const express = require('express');
 const router = express.Router();
 const { google } = require('googleapis');
 const { getSubtitles } = require('youtube-captions-scraper');
-const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const OpenAI = require('openai');
@@ -27,48 +26,7 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 }) : null;
 
-// Function to get transcript using Python youtube-transcript-api
-const getTranscriptWithPython = (videoId) => {
-  return new Promise((resolve, reject) => {
-    const pythonScript = path.join(__dirname, '..', 'get_transcript.py');
-    const pythonProcess = spawn('python3', [pythonScript, videoId]);
-    
-    let output = '';
-    let errorOutput = '';
-    
-    pythonProcess.stdout.on('data', (data) => {
-      output += data.toString();
-    });
-    
-    pythonProcess.stderr.on('data', (data) => {
-      errorOutput += data.toString();
-    });
-    
-    pythonProcess.on('close', (code) => {
-      if (code === 0) {
-        try {
-          // Parse the output from Python script
-          const lines = output.trim().split('\n').filter(line => line.trim());
-          const transcript = lines.map(line => {
-            const parsed = JSON.parse(line);
-            return {
-              text: parsed.text,
-              start: parsed.start,
-              dur: parsed.duration || 0
-            };
-          });
-          resolve(transcript);
-        } catch (parseError) {
-          console.error('Parse error:', parseError);
-          console.error('Output:', output);
-          reject(new Error('Failed to parse Python output: ' + parseError.message));
-        }
-      } else {
-        reject(new Error(errorOutput || 'Python script failed'));
-      }
-    });
-  });
-};
+// Removed Python transcript function - using Node.js only approach
 
 // Function to split text into sentences using Natural.js
 const splitTextWithNatural = async (fullText, timestamps) => {
@@ -121,53 +79,7 @@ const splitTextWithNatural = async (fullText, timestamps) => {
   }
 };
 
-// Function to correct and split text using AI with timing preservation
-const splitTextWithAIAndTiming = async (fullText, transcript) => {
-  if (!openai) {
-    console.log('OpenAI API key not provided, using fallback method');
-    return null;
-  }
-
-  try {
-    console.log('🤖 Using AI for sentence splitting...');
-    
-    const prompt = `Split the following transcript text into natural, complete sentences. Each sentence should be on a separate line. Keep the original text exactly as is, just add line breaks between sentences:
-
-${fullText}`;
-
-    const response = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        {
-          role: "system",
-          content: "You are a helpful assistant that splits text into natural sentences. Return only the split text with each sentence on a new line, preserving the original text exactly."
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
-      max_tokens: 2000,
-      temperature: 0.1,
-    });
-
-    const splitText = response.choices[0].message.content.trim();
-    const aiSentences = splitText.split('\n').filter(s => s.trim().length > 0);
-    
-    console.log(`🤖 AI split text into ${aiSentences.length} sentences`);
-    console.log(`📝 Original: ${fullText.substring(0, 100)}...`);
-    console.log(`✂️ Split: ${splitText.substring(0, 100)}...`);
-    
-    // Map split sentences to original transcript timing
-    const sentencesWithTiming = mapCorrectedSentencesToTiming(aiSentences, transcript, fullText);
-    
-    return sentencesWithTiming;
-    
-  } catch (error) {
-    console.error('OpenAI API error:', error);
-    return null;
-  }
-};
+// Removed complex AI functions to simplify processing and avoid timeouts
 
 // Function to map split sentences to original transcript timing
 const mapCorrectedSentencesToTiming = (splitSentences, transcript, originalText) => {
@@ -785,21 +697,22 @@ router.get('/video/:videoId', async (req, res) => {
   }
 });
 
-// Get video transcript
+// Get video transcript (Node.js only)
 router.get('/transcript/:videoId', async (req, res) => {
   const { videoId } = req.params;
   let transcript = [];
   try {
-    // Try Node.js method first
+    // Try Node.js method only
     transcript = await getSubtitles({ videoID: videoId, lang: 'en' });
     if (!transcript.length) {
       transcript = await getSubtitles({ videoID: videoId, lang: 'a.en' });
     }
     
-    // If Node.js method fails, try Python method
     if (!transcript.length) {
-      console.log('Trying Python method for transcript...');
-      transcript = await getTranscriptWithPython(videoId);
+      return res.status(404).json({ 
+        error: 'No English captions found for this video.',
+        details: 'This video may not have English subtitles'
+      });
     }
     
     res.json({
