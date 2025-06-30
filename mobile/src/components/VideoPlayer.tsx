@@ -1,5 +1,5 @@
 import React, { useRef, forwardRef, useImperativeHandle, useState, useEffect } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, StyleSheet, Platform } from 'react-native';
 import { WebView } from 'react-native-webview';
 
 type Props = {
@@ -13,13 +13,63 @@ export type VideoPlayerRef = {
   getCurrentTime: (callback: (time: number) => void) => void;
 };
 
-const VideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) => {
+// Web component using iframe
+const WebVideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) => {
+  const [currentTime, setCurrentTime] = useState(0);
+  const [startTime, setStartTime] = useState(0);
+  const [key, setKey] = useState(0);
+
+  useImperativeHandle(ref, () => ({
+    seekTo: (timeInSeconds: number) => {
+      console.log(`WebVideoPlayer: Seeking to ${timeInSeconds}s`);
+      setStartTime(Math.floor(timeInSeconds));
+      setKey(prev => prev + 1); // Force iframe reload
+    },
+    play: () => {
+      console.log('📹 WebVideoPlayer: Play command (iframe limitation)');
+      // Note: iframe doesn't allow programmatic play/pause
+    },
+    pause: () => {
+      console.log('📹 WebVideoPlayer: Pause command (iframe limitation)');
+      // Note: iframe doesn't allow programmatic play/pause
+    },
+    getCurrentTime: (callback: (time: number) => void) => {
+      callback(currentTime);
+    },
+  }));
+
+  const embedUrl = `https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=0&start=${startTime}&controls=1&rel=0&showinfo=0&modestbranding=1`;
+
+  if (Platform.OS === 'web') {
+    return (
+      <View style={styles.container}>
+        <iframe
+          key={key}
+          src={embedUrl}
+          style={{
+            width: '100%',
+            height: '100%',
+            border: 'none',
+            backgroundColor: '#000',
+          }}
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowFullScreen
+        />
+      </View>
+    );
+  }
+
+  // Fallback for unsupported platforms
+  return <View style={styles.container} />;
+});
+
+// Native component using WebView
+const NativeVideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) => {
   const webViewRef = useRef<WebView>(null);
   const [currentUrl, setCurrentUrl] = useState(`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=0`);
-  const [key, setKey] = useState(0); // Key for forcing WebView reload
+  const [key, setKey] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
 
-  // Function for injecting JavaScript code
   const injectJavaScript = (code: string) => {
     if (webViewRef.current) {
       webViewRef.current.postMessage(code);
@@ -28,14 +78,13 @@ const VideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) => {
 
   useImperativeHandle(ref, () => ({
     seekTo: (timeInSeconds: number) => {
-      // YouTube embed URL with timestamp (autoplay disabled)
       const startTime = Math.floor(timeInSeconds);
       const embedUrl = `https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=0&start=${startTime}`;
       
       console.log(`VideoPlayer: Seeking to ${startTime}s with embed URL`);
       
       setCurrentUrl(embedUrl);
-      setKey(prev => prev + 1); // Force WebView reload
+      setKey(prev => prev + 1);
     },
     play: () => {
       console.log('📹 VideoPlayer: Play command');
@@ -50,11 +99,8 @@ const VideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) => {
     },
   }));
 
-  // Function to handle messages received from WebView
   const onMessage = (event: any) => {
     const message = event.nativeEvent.data;
-    // Remove time update logs (too frequent)
-    // console.log('📹 VideoPlayer received message:', message);
     
     if (message.startsWith('TIME:')) {
       const time = parseFloat(message.replace('TIME:', ''));
@@ -62,7 +108,6 @@ const VideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) => {
     }
   };
 
-  // Generate HTML using YouTube IFrame API
   const generateHTML = () => {
     const startTime = currentUrl.includes('start=') 
       ? currentUrl.split('start=')[1].split('&')[0] 
@@ -92,7 +137,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) => {
             height: '100%',
             width: '100%',
             videoId: '${videoId}',
-                         playerVars: {
+            playerVars: {
                'autoplay': 0,
                'start': ${startTime},
                'controls': 1,
@@ -107,8 +152,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) => {
           });
         }
         
-                 function onPlayerReady(event) {
-           // Interval for time updates (logs removed)
+        function onPlayerReady(event) {
            setInterval(function() {
              if (player && player.getCurrentTime) {
                var currentTime = player.getCurrentTime();
@@ -118,11 +162,10 @@ const VideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) => {
          }
          
          function onPlayerStateChange(event) {
-           // Player state change (logs removed)
+           // Player state change
          }
         
-         // Handle messages sent from React Native
-         document.addEventListener('message', function(event) {
+        document.addEventListener('message', function(event) {
            var command = event.data;
            
            if (command === 'PLAY' && player) {
@@ -132,8 +175,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) => {
            }
          });
          
-         // Message handling for Android
-         window.addEventListener('message', function(event) {
+        window.addEventListener('message', function(event) {
            var command = event.data;
            
            if (command === 'PLAY' && player) {
@@ -151,7 +193,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) => {
   return (
     <View style={styles.container}>
       <WebView
-        key={key} // Force WebView reload with key change
+        key={key}
         ref={webViewRef}
         style={styles.webview}
         javaScriptEnabled={true}
@@ -166,6 +208,15 @@ const VideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) => {
       />
     </View>
   );
+});
+
+// Main component that chooses between web and native
+const VideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) => {
+  if (Platform.OS === 'web') {
+    return <WebVideoPlayer ref={ref} videoId={videoId} />;
+  } else {
+    return <NativeVideoPlayer ref={ref} videoId={videoId} />;
+  }
 });
 
 VideoPlayer.displayName = 'VideoPlayer';

@@ -813,60 +813,57 @@ router.get('/transcript/:videoId', async (req, res) => {
   }
 });
 
-// Get video transcript with timing for practice
+// Get video transcript with timing for practice (simplified version)
 router.get('/transcript-practice/:videoId', async (req, res) => {
   try {
     const { videoId } = req.params;
     let transcript = [];
     
+    console.log(`🎯 Getting practice transcript for video: ${videoId}`);
+    
     try {
-      // Try Node.js method first
+      // Try Node.js method only (remove Python dependency)
       transcript = await getSubtitles({ videoID: videoId, lang: 'en' });
+      console.log(`📝 Got ${transcript.length} transcript entries with 'en'`);
+      
       if (!transcript.length) {
         transcript = await getSubtitles({ videoID: videoId, lang: 'a.en' });
+        console.log(`📝 Got ${transcript.length} transcript entries with 'a.en'`);
       }
     } catch (nodeError) {
-      console.log('Node.js method failed, trying Python method...');
-    }
-    
-    // If Node.js method fails, try Python method
-    if (!transcript.length) {
-      try {
-        console.log('Trying Python method for practice transcript...');
-        transcript = await getTranscriptWithPython(videoId);
-      } catch (pythonError) {
-        console.error('Python method also failed:', pythonError);
-        return res.status(404).json({ error: 'No English captions found for this video.' });
-      }
+      console.error('Node.js captions scraper failed:', nodeError.message);
+      return res.status(404).json({ 
+        error: 'No English captions found for this video.',
+        details: 'Auto-generated captions may not be available'
+      });
     }
     
     if (!transcript.length) {
-      return res.status(404).json({ error: 'No English captions found for this video.' });
+      return res.status(404).json({ 
+        error: 'No English captions found for this video.',
+        details: 'This video may not have English subtitles'
+      });
     }
     
-    // Use hybrid approach: AI for accurate sentence splitting + original timing preservation
-    const fullText = transcript.map(entry => entry.text).join(' ');
+    console.log(`✅ Successfully got transcript with ${transcript.length} entries`);
     
-    let sentences;
+    // Use simple sentence merging (remove AI complexity to avoid timeouts)
+    const sentences = mergeIntoSentences(transcript);
     
-    // Try AI-powered sentence splitting with timing preservation
-    const aiSentences = await splitTextWithAIAndTiming(fullText, transcript);
-    if (aiSentences && aiSentences.length > 0) {
-      console.log('Using AI-powered sentence splitting with preserved timing');
-      sentences = aiSentences;
-    } else {
-      // Fallback to rule-based method
-      console.log('AI failed, using rule-based sentence splitting');
-      sentences = mergeIntoSentences(transcript);
-    }
+    console.log(`📄 Merged into ${sentences.length} sentences`);
     
     res.json({
       sentences,
-      totalDuration: sentences.length > 0 ? sentences[sentences.length - 1].end : 0
+      totalDuration: sentences.length > 0 ? sentences[sentences.length - 1].end : 0,
+      processed: true
     });
+    
   } catch (error) {
-    console.error('Practice transcript error:', error);
-    res.status(500).json({ error: 'Failed to get practice transcript', details: error.message || error });
+    console.error('❌ Practice transcript error:', error);
+    res.status(500).json({ 
+      error: 'Failed to get practice transcript', 
+      details: error.message || 'Unknown error occurred'
+    });
   }
 });
 

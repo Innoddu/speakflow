@@ -1,17 +1,20 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
+    "name": "SpeakFlow",
+    "slug": "speakflow",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.ciui9494.mobile"
@@ -29,7 +32,13 @@
       "package": "com.ciui9494.mobile"
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "name": "SpeakFlow - English Practice",
+      "shortName": "SpeakFlow",
+      "description": "Practice English with YouTube videos",
+      "display": "standalone",
+      "themeColor": "#4285f4",
+      "backgroundColor": "#ffffff"
     },
     "plugins": [
       "expo-audio"
@@ -37,6 +46,12 @@
     "permissions": [
       "RECORD_AUDIO",
       "MODIFY_AUDIO_SETTINGS"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "68535394-058b-4e52-a2df-2050cd2109e7"
+      }
+    },
+    "owner": "ciui9494"
   }
 }
