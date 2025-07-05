@@ -1,0 +1,19 @@
+[build]
+  # Build in the backend directory
+  buildCommand = "cd backend && npm ci"
+
+[deploy]
+  # Start command for the backend
+  startCommand = "cd backend && npm start"
+  
+  # Health check endpoint
+  healthcheckPath = "/api/health"
+  
+  # Timeout settings
+  healthcheckTimeout = 30
+  restartPolicyType = "ON_FAILURE"
+  restartPolicyMaxRetries = 3
+
+[environments.production]
+  # Production environment variables
+  NODE_ENV = "production" 

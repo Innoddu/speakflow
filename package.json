@@ -1,6 +1,22 @@
 {
+  "name": "speakflow",
+  "version": "1.0.0",
+  "description": "English speaking practice app with YouTube videos",
+  "main": "backend/server.js",
+  "scripts": {
+    "start": "cd backend && npm start",
+    "dev": "cd backend && npm run dev",
+    "install": "cd backend && npm install",
+    "build": "cd backend && npm install"
+  },
+  "keywords": ["english", "speaking", "practice", "youtube", "education"],
+  "author": "",
+  "license": "ISC",
   "dependencies": {
     "react-native-webview": "^13.15.0",
     "youtube-captions-scraper": "^2.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
