@@ -8,6 +8,7 @@ const OpenAI = require('openai');
 const natural = require('natural');
 const ytdl = require('@distube/ytdl-core');
 const s3Service = require('../services/s3Service');
+const youtubeCaptions = require('../services/youtube-captions');
 
 // Create audio directory if it doesn't exist
 const audioDir = path.join(__dirname, '..', 'public', 'audio');
@@ -726,55 +727,149 @@ router.get('/transcript/:videoId', async (req, res) => {
   }
 });
 
-// Get video transcript with timing for practice (simplified version)
+// Get video transcript with timing for practice (yt-dlp priority version)
 router.get('/transcript-practice/:videoId', async (req, res) => {
   try {
     const { videoId } = req.params;
-    let transcript = [];
     
     console.log(`🎯 Getting practice transcript for video: ${videoId}`);
     
+    // Step 1: Try yt-dlp first (most reliable)
     try {
-      // Try Node.js method only (remove Python dependency)
-      transcript = await getSubtitles({ videoID: videoId, lang: 'en' });
-      console.log(`📝 Got ${transcript.length} transcript entries with 'en'`);
+      console.log('🚀 Trying yt-dlp for caption extraction...');
+      const ytDlpResult = await youtubeCaptions.getCaptions(videoId, 'en');
       
-      if (!transcript.length) {
-        transcript = await getSubtitles({ videoID: videoId, lang: 'a.en' });
-        console.log(`📝 Got ${transcript.length} transcript entries with 'a.en'`);
+      if (ytDlpResult.success && ytDlpResult.captions.length > 0) {
+        console.log(`✅ yt-dlp success: ${ytDlpResult.captions.length} caption entries`);
+        
+        // Merge captions into sentences
+        const sentences = mergeIntoSentences(ytDlpResult.captions);
+        console.log(`📄 Merged into ${sentences.length} sentences`);
+        
+        return res.json({
+          sentences,
+          totalDuration: sentences.length > 0 ? sentences[sentences.length - 1].end : 0,
+          processed: true,
+          source: 'yt-dlp',
+          captionCount: ytDlpResult.captions.length
+        });
       }
-    } catch (nodeError) {
-      console.error('Node.js captions scraper failed:', nodeError.message);
-      return res.status(404).json({ 
-        error: 'No English subtitles available',
-        details: 'This video does not have English subtitles or auto-generated captions. Please try a different video with English subtitles.',
-        videoId: videoId,
-        suggestion: 'Look for videos with the "CC" (closed captions) icon or try searching for videos from English-speaking channels.'
-      });
+    } catch (ytDlpError) {
+      console.error('yt-dlp failed:', ytDlpError.message);
+      console.log('🔄 Falling back to YouTube Data API v3...');
     }
     
-    if (!transcript.length) {
+    // Step 2: Fallback to YouTube Data API v3
+    let captionTracks = [];
+    try {
+      const captionsResponse = await youtube.captions.list({
+        part: 'snippet',
+        videoId: videoId
+      });
+      
+      captionTracks = captionsResponse.data.items || [];
+      console.log(`📝 Found ${captionTracks.length} caption tracks`);
+      
+      // Find English captions (prefer manual over auto-generated)
+      const manualEnglish = captionTracks.find(track => 
+        track.snippet.language === 'en' && track.snippet.trackKind === 'standard'
+      );
+      const autoEnglish = captionTracks.find(track => 
+        track.snippet.language === 'en' && track.snippet.trackKind === 'ASR'
+      );
+      
+      const selectedTrack = manualEnglish || autoEnglish;
+      
+      if (!selectedTrack) {
+        console.log('❌ No English captions found');
+        return res.status(404).json({ 
+          error: 'No English subtitles available',
+          details: 'This video does not have English subtitles or auto-generated captions. Please try a different video with English subtitles.',
+          videoId: videoId,
+          suggestion: 'Look for videos with the "CC" (closed captions) icon or try searching for videos from English-speaking channels.',
+          availableTracks: captionTracks.map(track => ({
+            language: track.snippet.language,
+            name: track.snippet.name,
+            kind: track.snippet.trackKind
+          }))
+        });
+      }
+      
+      console.log(`✅ Using ${selectedTrack.snippet.trackKind} English captions`);
+      
+      // Step 3: Download caption content
+      const captionId = selectedTrack.id;
+      const captionDownloadResponse = await youtube.captions.download({
+        id: captionId,
+        tfmt: 'srt' // SubRip format
+      });
+      
+      const srtContent = captionDownloadResponse.data;
+      console.log(`📄 Downloaded SRT content (${srtContent.length} characters)`);
+      
+      // Step 4: Parse SRT to extract timing and text
+      const transcript = parseSRTContent(srtContent);
+      console.log(`🔄 Parsed ${transcript.length} subtitle segments`);
+      
+      if (transcript.length === 0) {
+        return res.status(404).json({ 
+          error: 'Empty subtitles',
+          details: 'The subtitle file was downloaded but appears to be empty.',
+          videoId: videoId
+        });
+      }
+      
+      // Step 5: Merge into sentences
+      const sentences = mergeIntoSentences(transcript);
+      console.log(`📄 Merged into ${sentences.length} sentences`);
+      
+      res.json({
+        sentences,
+        totalDuration: sentences.length > 0 ? sentences[sentences.length - 1].end : 0,
+        processed: true,
+        source: 'youtube-api',
+        captionType: selectedTrack.snippet.trackKind,
+        language: selectedTrack.snippet.language
+      });
+      
+    } catch (apiError) {
+      console.error('YouTube Data API error:', apiError.message);
+      
+      // Step 3: Final fallback to youtube-captions-scraper
+      console.log('🔄 Final fallback to youtube-captions-scraper...');
+      try {
+        let transcript = await getSubtitles({ videoID: videoId, lang: 'en' });
+        if (!transcript.length) {
+          transcript = await getSubtitles({ videoID: videoId, lang: 'a.en' });
+        }
+        
+        if (transcript.length > 0) {
+          console.log(`✅ Fallback success: ${transcript.length} entries`);
+          const sentences = mergeIntoSentences(transcript);
+          
+          return res.json({
+            sentences,
+            totalDuration: sentences.length > 0 ? sentences[sentences.length - 1].end : 0,
+            processed: true,
+            source: 'youtube-scraper'
+          });
+        }
+      } catch (fallbackError) {
+        console.error('Final fallback also failed:', fallbackError.message);
+      }
+      
       return res.status(404).json({ 
         error: 'No English subtitles available',
-        details: 'This video does not have English subtitles or auto-generated captions. Please try a different video with English subtitles.',
+        details: 'This video does not have English subtitles or auto-generated captions. All extraction methods failed. Please try a different video with English subtitles.',
         videoId: videoId,
-        suggestion: 'Look for videos with the "CC" (closed captions) icon or try searching for videos from English-speaking channels.'
+        suggestion: 'Look for videos with the "CC" (closed captions) icon or try searching for videos from English-speaking channels.',
+        methods: {
+          ytDlp: 'Failed',
+          youtubeApi: apiError.message,
+          scraper: 'Failed'
+        }
       });
     }
-    
-    console.log(`✅ Successfully got transcript with ${transcript.length} entries`);
-    
-    // Use simple sentence merging (remove AI complexity to avoid timeouts)
-    const sentences = mergeIntoSentences(transcript);
-    
-    console.log(`📄 Merged into ${sentences.length} sentences`);
-    
-    res.json({
-      sentences,
-      totalDuration: sentences.length > 0 ? sentences[sentences.length - 1].end : 0,
-      processed: true,
-      source: 'youtube'
-    });
     
   } catch (error) {
     console.error('❌ Practice transcript error:', error);
@@ -785,6 +880,39 @@ router.get('/transcript-practice/:videoId', async (req, res) => {
     });
   }
 });
+
+// Helper function to parse SRT content
+function parseSRTContent(srtContent) {
+  const transcript = [];
+  const blocks = srtContent.split('\n\n').filter(block => block.trim());
+  
+  for (const block of blocks) {
+    const lines = block.split('\n');
+    if (lines.length >= 3) {
+      const timeMatch = lines[1].match(/(\d{2}):(\d{2}):(\d{2}),(\d{3}) --> (\d{2}):(\d{2}):(\d{2}),(\d{3})/);
+      
+      if (timeMatch) {
+        const startTime = parseFloat(timeMatch[1]) * 3600 + parseFloat(timeMatch[2]) * 60 + 
+                         parseFloat(timeMatch[3]) + parseFloat(timeMatch[4]) / 1000;
+        const endTime = parseFloat(timeMatch[5]) * 3600 + parseFloat(timeMatch[6]) * 60 + 
+                       parseFloat(timeMatch[7]) + parseFloat(timeMatch[8]) / 1000;
+        
+        const text = lines.slice(2).join(' ').replace(/<[^>]*>/g, '').trim(); // Remove HTML tags
+        
+        if (text) {
+          transcript.push({
+            text: text,
+            start: startTime,
+            dur: endTime - startTime,
+            duration: endTime - startTime
+          });
+        }
+      }
+    }
+  }
+  
+  return transcript;
+}
 
 // Download and serve audio file for a video with S3 integration
 router.get('/audio/:videoId', async (req, res) => {

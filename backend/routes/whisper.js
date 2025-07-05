@@ -426,38 +426,109 @@ function processSentencesFromWhisper(transcription) {
   return filteredSentences;
 }
 
-// Get YouTube subtitles (fallback)
+// Get YouTube subtitles (fallback) - Updated to use YouTube Data API v3
 router.get('/youtube-subtitles/:videoId', async (req, res) => {
   try {
     const { videoId } = req.params;
     console.log('📺 Fetching YouTube subtitles for:', videoId);
 
-    // Try to get auto-generated or manual subtitles
-    const { getSubtitles } = require('youtube-captions-scraper');
-    
-    const subtitles = await getSubtitles({
-      videoID: videoId,
-      lang: 'en' // English subtitles
+    // Import YouTube API (from youtube.js route)
+    const { google } = require('googleapis');
+    const youtube = google.youtube({
+      version: 'v3',
+      auth: process.env.YOUTUBE_API_KEY
     });
 
-    if (subtitles && subtitles.length > 0) {
-      console.log('✅ YouTube subtitles found:', subtitles.length, 'entries');
+    // Step 1: Get caption tracks using YouTube Data API v3
+    const captionsResponse = await youtube.captions.list({
+      part: 'snippet',
+      videoId: videoId
+    });
+    
+    const captionTracks = captionsResponse.data.items || [];
+    console.log(`📝 Found ${captionTracks.length} caption tracks`);
+    
+    // Find English captions (prefer manual over auto-generated)
+    const manualEnglish = captionTracks.find(track => 
+      track.snippet.language === 'en' && track.snippet.trackKind === 'standard'
+    );
+    const autoEnglish = captionTracks.find(track => 
+      track.snippet.language === 'en' && track.snippet.trackKind === 'ASR'
+    );
+    
+    const selectedTrack = manualEnglish || autoEnglish;
+    
+    if (!selectedTrack) {
+      console.log('❌ No English captions found via API');
       
-      // Process YouTube subtitles into sentences
-      const processedSentences = processYouTubeSubtitles(subtitles);
+      // Fallback to old scraper method
+      try {
+        const { getSubtitles } = require('youtube-captions-scraper');
+        const subtitles = await getSubtitles({
+          videoID: videoId,
+          lang: 'en'
+        });
+
+        if (subtitles && subtitles.length > 0) {
+          console.log('✅ Fallback scraper found subtitles:', subtitles.length, 'entries');
+          const processedSentences = processYouTubeSubtitles(subtitles);
+          
+          return res.json({
+            success: true,
+            source: 'youtube-scraper',
+            sentences: processedSentences,
+            raw: subtitles
+          });
+        }
+      } catch (scraperError) {
+        console.error('Scraper fallback failed:', scraperError.message);
+      }
       
-      res.json({
-        success: true,
-        source: 'youtube',
-        sentences: processedSentences,
-        raw: subtitles
-      });
-    } else {
-      res.status(404).json({
+      return res.status(404).json({
         success: false,
-        error: 'No subtitles found for this video'
+        error: 'No subtitles found for this video',
+        availableTracks: captionTracks.map(track => ({
+          language: track.snippet.language,
+          name: track.snippet.name,
+          kind: track.snippet.trackKind
+        }))
       });
     }
+    
+    console.log(`✅ Using ${selectedTrack.snippet.trackKind} English captions via API`);
+    
+    // Step 2: Download caption content
+    const captionId = selectedTrack.id;
+    const captionDownloadResponse = await youtube.captions.download({
+      id: captionId,
+      tfmt: 'srt' // SubRip format
+    });
+    
+    const srtContent = captionDownloadResponse.data;
+    console.log(`📄 Downloaded SRT content (${srtContent.length} characters)`);
+    
+    // Step 3: Parse SRT to extract timing and text
+    const transcript = parseSRTContentForWhisper(srtContent);
+    console.log(`🔄 Parsed ${transcript.length} subtitle segments`);
+    
+    if (transcript.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Empty subtitle content'
+      });
+    }
+    
+    // Step 4: Process into sentences
+    const processedSentences = processYouTubeSubtitles(transcript);
+    
+    res.json({
+      success: true,
+      source: 'youtube-api',
+      sentences: processedSentences,
+      captionType: selectedTrack.snippet.trackKind,
+      language: selectedTrack.snippet.language,
+      raw: transcript
+    });
 
   } catch (error) {
     console.error('❌ YouTube subtitles error:', error);
@@ -468,6 +539,38 @@ router.get('/youtube-subtitles/:videoId', async (req, res) => {
     });
   }
 });
+
+// Helper function to parse SRT content for Whisper route
+function parseSRTContentForWhisper(srtContent) {
+  const transcript = [];
+  const blocks = srtContent.split('\n\n').filter(block => block.trim());
+  
+  for (const block of blocks) {
+    const lines = block.split('\n');
+    if (lines.length >= 3) {
+      const timeMatch = lines[1].match(/(\d{2}):(\d{2}):(\d{2}),(\d{3}) --> (\d{2}):(\d{2}):(\d{2}),(\d{3})/);
+      
+      if (timeMatch) {
+        const startTime = parseFloat(timeMatch[1]) * 3600 + parseFloat(timeMatch[2]) * 60 + 
+                         parseFloat(timeMatch[3]) + parseFloat(timeMatch[4]) / 1000;
+        const endTime = parseFloat(timeMatch[5]) * 3600 + parseFloat(timeMatch[6]) * 60 + 
+                       parseFloat(timeMatch[7]) + parseFloat(timeMatch[8]) / 1000;
+        
+        const text = lines.slice(2).join(' ').replace(/<[^>]*>/g, '').trim(); // Remove HTML tags
+        
+        if (text) {
+          transcript.push({
+            text: text,
+            start: startTime,
+            dur: endTime - startTime
+          });
+        }
+      }
+    }
+  }
+  
+  return transcript;
+}
 
 // Process YouTube subtitles into sentences
 function processYouTubeSubtitles(subtitles) {
