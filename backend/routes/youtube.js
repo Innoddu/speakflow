@@ -1237,4 +1237,18 @@ router.get('/audio/:videoId', async (req, res) => {
   }
 });
 
+// Debug endpoint to test if latest code is deployed
+router.get('/debug/test', (req, res) => {
+  res.json({
+    message: 'Latest code is deployed!',
+    timestamp: new Date().toISOString(),
+    version: '2025-07-05-v2',
+    environment: {
+      NODE_ENV: process.env.NODE_ENV,
+      hasYouTubeAPI: !!process.env.YOUTUBE_API_KEY,
+      hasOpenAI: !!process.env.OPENAI_API_KEY
+    }
+  });
+});
+
 module.exports = router;
