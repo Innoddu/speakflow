@@ -696,4 +696,132 @@ function processYouTubeSubtitles(subtitles) {
   return sentences;
 }
 
+// Debug endpoint to check Python and yt-dlp environment
+router.get('/debug/environment', async (req, res) => {
+  try {
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
+    
+    const results = {
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV || 'development',
+      platform: process.platform,
+      arch: process.arch,
+      nodeVersion: process.version,
+      checks: {}
+    };
+    
+    // Check Python
+    try {
+      const { stdout: pythonVersion } = await execAsync('python --version');
+      results.checks.python = {
+        available: true,
+        version: pythonVersion.trim(),
+        command: 'python --version'
+      };
+    } catch (error) {
+      try {
+        const { stdout: python3Version } = await execAsync('python3 --version');
+        results.checks.python = {
+          available: true,
+          version: python3Version.trim(),
+          command: 'python3 --version'
+        };
+      } catch (error3) {
+        results.checks.python = {
+          available: false,
+          error: error3.message,
+          tried: ['python --version', 'python3 --version']
+        };
+      }
+    }
+    
+    // Check pip
+    try {
+      const { stdout: pipVersion } = await execAsync('pip --version');
+      results.checks.pip = {
+        available: true,
+        version: pipVersion.trim()
+      };
+    } catch (error) {
+      try {
+        const { stdout: pip3Version } = await execAsync('pip3 --version');
+        results.checks.pip = {
+          available: true,
+          version: pip3Version.trim()
+        };
+      } catch (error3) {
+        results.checks.pip = {
+          available: false,
+          error: error3.message
+        };
+      }
+    }
+    
+    // Check yt-dlp
+    try {
+      const { stdout: ytdlpVersion } = await execAsync('yt-dlp --version');
+      results.checks.ytdlp = {
+        available: true,
+        version: ytdlpVersion.trim(),
+        command: 'yt-dlp --version'
+      };
+    } catch (error) {
+      results.checks.ytdlp = {
+        available: false,
+        error: error.message
+      };
+    }
+    
+    // Check youtube-dl-exec package
+    try {
+      const youtubeDlExec = require('youtube-dl-exec');
+      results.checks.youtubeDlExec = {
+        available: true,
+        packageLoaded: true
+      };
+    } catch (error) {
+      results.checks.youtubeDlExec = {
+        available: false,
+        error: error.message
+      };
+    }
+    
+    // Check ffmpeg
+    try {
+      const { stdout: ffmpegVersion } = await execAsync('ffmpeg -version');
+      results.checks.ffmpeg = {
+        available: true,
+        version: ffmpegVersion.split('\n')[0]
+      };
+    } catch (error) {
+      results.checks.ffmpeg = {
+        available: false,
+        error: error.message
+      };
+    }
+    
+    // Check environment variables
+    results.environmentVariables = {
+      hasYouTubeApiKey: !!process.env.YOUTUBE_API_KEY,
+      hasOpenAiApiKey: !!process.env.OPENAI_API_KEY,
+      hasGoogleClientId: !!process.env.GOOGLE_CLIENT_ID,
+      hasGoogleClientSecret: !!process.env.GOOGLE_CLIENT_SECRET,
+      nodeEnv: process.env.NODE_ENV,
+      port: process.env.PORT
+    };
+    
+    res.json(results);
+    
+  } catch (error) {
+    console.error('❌ Environment debug error:', error);
+    res.status(500).json({
+      error: 'Failed to check environment',
+      details: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 module.exports = router; 
