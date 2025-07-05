@@ -177,6 +177,8 @@ export default function ScriptPracticeScreen() {
       setAudioLoading(true);
       console.log('⏳ Starting to load audio for video:', videoId);
       console.log('⚠️ This may take 1-2 minutes for first-time downloads...');
+      console.log('🌐 API Base URL:', API_CONFIG.BASE_URL);
+      console.log('📱 Platform:', Platform.OS);
       
       const audio = await getAudioUrl(videoId);
       setAudioInfo(audio);
@@ -186,29 +188,44 @@ export default function ScriptPracticeScreen() {
         format: audio.format,
         cached: audio.cached,
         source: audio.source,
-        audioUrlLength: audio.audioUrl.length
+        audioUrlLength: audio.audioUrl.length,
+        audioUrlStart: audio.audioUrl.substring(0, 50) + '...'
       });
       
       // Update history with audio status
       await updateAudioStatus(videoId, true, audio.source);
     } catch (error) {
       console.error('❌ Failed to load audio:', error);
-      console.error('Error details:', error);
+      console.error('Error details:', {
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+        name: error instanceof Error ? error.name : undefined,
+        videoId,
+        platform: Platform.OS,
+        apiUrl: API_CONFIG.BASE_URL
+      });
       setAudioInfo(null);
       
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const isTimeout = errorMessage.includes('timeout');
+      const isNetworkError = errorMessage.includes('Network Error') || errorMessage.includes('CORS');
       
-      Alert.alert(
-        'Audio Loading Error', 
-        isTimeout 
-          ? 'Audio download timed out. This can happen with longer videos.\n\nYou can:\n• Try again later\n• Use video playback instead\n• Choose a shorter video'
-          : 'Failed to load audio. Video will be used instead.\n\nError: ' + errorMessage,
-        [
-          { text: 'Use Video', style: 'default' },
-          { text: 'Try Again', onPress: loadAudio, style: 'cancel' }
-        ]
-      );
+      if (Platform.OS === 'web') {
+        // For web, don't show alert - just log and continue with video fallback
+        console.log('🌐 Web platform: Using video player fallback due to audio loading error');
+        console.log('🔍 Error type:', isTimeout ? 'Timeout' : isNetworkError ? 'Network/CORS' : 'Other');
+      } else {
+        Alert.alert(
+          'Audio Loading Error', 
+          isTimeout 
+            ? 'Audio download timed out. This can happen with longer videos.\n\nYou can:\n• Try again later\n• Use video playback instead\n• Choose a shorter video'
+            : 'Failed to load audio. Video will be used instead.\n\nError: ' + errorMessage,
+          [
+            { text: 'Use Video', style: 'default' },
+            { text: 'Try Again', onPress: loadAudio, style: 'cancel' }
+          ]
+        );
+      }
     } finally {
       setAudioLoading(false);
     }

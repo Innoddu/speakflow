@@ -13,7 +13,150 @@ export type AudioPlayerRef = {
   getCurrentTime: (callback: (time: number) => void) => void;
 };
 
-const AudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => {
+// Web Audio Player using HTML5 Audio
+const WebAudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => {
+  const [isLoading, setIsLoading] = useState(true);
+  const [hasError, setHasError] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [duration, setDuration] = useState<number>(0);
+  const [position, setPosition] = useState<number>(0);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const positionIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  useImperativeHandle(ref, () => ({
+    seekTo: (timeInSeconds: number) => {
+      if (audioRef.current) {
+        audioRef.current.currentTime = timeInSeconds;
+        setPosition(timeInSeconds * 1000);
+        console.log(`🎵 Web Audio: Seeked to ${timeInSeconds}s`);
+      }
+    },
+    play: () => {
+      if (audioRef.current) {
+        audioRef.current.play()
+          .then(() => {
+            setIsPlaying(true);
+            console.log('▶️ Web Audio: Started playing');
+          })
+          .catch((error) => {
+            console.error('❌ Web Audio play error:', error);
+          });
+      }
+    },
+    pause: () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        setIsPlaying(false);
+        console.log('⏸️ Web Audio: Paused');
+      }
+    },
+    getCurrentTime: (callback: (time: number) => void) => {
+      const timeInSeconds = position / 1000;
+      callback(timeInSeconds);
+    },
+  }));
+
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      console.log('🎵 Web AudioPlayer: Loading audio from:', audioUrl.substring(0, 100) + '...');
+      
+      // Create audio element for web
+      const audio = document.createElement('audio');
+      audio.crossOrigin = 'anonymous';
+      audio.preload = 'metadata';
+      
+      audio.onloadstart = () => {
+        console.log('🎵 Web Audio: Loading started');
+        setIsLoading(true);
+        setHasError(false);
+      };
+      
+      audio.oncanplaythrough = () => {
+        console.log('✅ Web Audio: Can play through');
+        setIsLoading(false);
+        setDuration(audio.duration * 1000);
+      };
+      
+      audio.onerror = (event: string | Event) => {
+        console.error('❌ Web Audio loading error:', event);
+        setHasError(true);
+        setIsLoading(false);
+      };
+      
+      audio.onplay = () => {
+        setIsPlaying(true);
+        // Start position tracking
+        positionIntervalRef.current = setInterval(() => {
+          if (audio.currentTime) {
+            setPosition(audio.currentTime * 1000);
+          }
+        }, 1000);
+      };
+      
+      audio.onpause = () => {
+        setIsPlaying(false);
+        if (positionIntervalRef.current) {
+          clearInterval(positionIntervalRef.current);
+          positionIntervalRef.current = null;
+        }
+      };
+      
+      audio.ontimeupdate = () => {
+        setPosition(audio.currentTime * 1000);
+      };
+      
+      audio.src = audioUrl;
+      audioRef.current = audio;
+      
+      // Cleanup function
+      return () => {
+        if (positionIntervalRef.current) {
+          clearInterval(positionIntervalRef.current);
+        }
+        if (audioRef.current) {
+          audioRef.current.pause();
+          audioRef.current.removeAttribute('src');
+          audioRef.current.load();
+        }
+      };
+    }
+  }, [audioUrl]);
+
+  if (hasError) {
+    return (
+      <View style={[styles.container, styles.errorContainer]}>
+        <Text style={styles.errorText}>⚠️ Audio format not supported</Text>
+        <Text style={styles.errorSubText}>Using video player instead</Text>
+      </View>
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <View style={styles.container}>
+        <ActivityIndicator size="small" color="#667eea" />
+        <Text style={styles.loadingText}>Loading audio...</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <Text style={styles.audioText}>🎵 Web Audio Ready</Text>
+      {isPlaying && (
+        <Text style={styles.statusText}>Playing</Text>
+      )}
+      {duration > 0 && (
+        <Text style={styles.durationText}>
+          Duration: {Math.round(duration / 1000)}s
+        </Text>
+      )}
+    </View>
+  );
+});
+
+// Native Audio Player using Expo Audio
+const NativeAudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => {
   const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
@@ -77,8 +220,7 @@ const AudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => {
 
   const loadAudio = async () => {
     try {
-      console.log(`🎵 AudioPlayer: Loading ${urlType} audio from:`, audioUrl.substring(0, 100) + '...');
-      console.log(`📱 Platform: ${Platform.OS}`);
+      console.log(`🎵 Native AudioPlayer: Loading ${urlType} audio from:`, audioUrl.substring(0, 100) + '...');
       
       setIsLoading(true);
       setHasError(false);
@@ -115,7 +257,7 @@ const AudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => {
 
       setSound(newSound);
       setIsLoading(false);
-      console.log('✅ Audio loaded successfully');
+      console.log('✅ Native Audio loaded successfully');
 
       // Clear timeout if loading succeeds
       if (loadingTimeoutRef.current) {
@@ -124,7 +266,7 @@ const AudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => {
       }
 
     } catch (error) {
-      console.error('❌ Audio loading failed:', error);
+      console.error('❌ Native Audio loading failed:', error);
       setHasError(true);
       setIsLoading(false);
     }
@@ -134,7 +276,7 @@ const AudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => {
     // Set loading timeout
     loadingTimeoutRef.current = setTimeout(() => {
       if (isLoading) {
-        console.error('⏰ Audio loading timeout');
+        console.error('⏰ Native Audio loading timeout');
         setHasError(true);
         setIsLoading(false);
       }
@@ -148,7 +290,7 @@ const AudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => {
         clearTimeout(loadingTimeoutRef.current);
       }
       if (sound) {
-        console.log('🧹 Cleaning up audio');
+        console.log('🧹 Cleaning up native audio');
         sound.unloadAsync();
       }
     };
@@ -174,7 +316,7 @@ const AudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.audioText}>🎵 Audio Ready</Text>
+      <Text style={styles.audioText}>🎵 Native Audio Ready</Text>
       {isPlaying && (
         <Text style={styles.statusText}>Playing</Text>
       )}
@@ -185,6 +327,15 @@ const AudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => {
       )}
     </View>
   );
+});
+
+// Main AudioPlayer component that chooses between web and native
+const AudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => {
+  if (Platform.OS === 'web') {
+    return <WebAudioPlayer ref={ref} audioUrl={audioUrl} />;
+  } else {
+    return <NativeAudioPlayer ref={ref} audioUrl={audioUrl} />;
+  }
 });
 
 AudioPlayer.displayName = 'AudioPlayer';
