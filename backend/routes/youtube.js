@@ -988,7 +988,7 @@ router.get('/audio/:videoId', async (req, res) => {
     
     const writeStream = fs.createWriteStream(tempWebMPath);
     
-    return new Promise((resolve, reject) => {
+    const downloadPromise = new Promise((resolve, reject) => {
       let downloadStartTime = Date.now();
       let downloadedBytes = 0;
       
@@ -1039,7 +1039,7 @@ router.get('/audio/:videoId', async (req, res) => {
             // Clean up local file to save space (optional)
             // s3Service.cleanupLocalFile(audioFilePath);
             
-            resolve(res.json({
+            resolve({
               audioUrl: s3Url,
               duration: info.videoDetails.lengthSeconds,
               title: info.videoDetails.title,
@@ -1051,11 +1051,11 @@ router.get('/audio/:videoId', async (req, res) => {
               fileSize: stats.size,
               cached: false,
               source: 's3'
-            }));
+            });
           } catch (s3Error) {
             console.error('S3 upload failed, serving local file:', s3Error);
             // Fallback to local serving if S3 upload fails
-            resolve(res.json({
+            resolve({
               audioUrl: `/audio/${audioFileName}`,
               duration: info.videoDetails.lengthSeconds,
               title: info.videoDetails.title,
@@ -1067,7 +1067,7 @@ router.get('/audio/:videoId', async (req, res) => {
               fileSize: stats.size,
               cached: false,
               source: 'local'
-            }));
+            });
           }
         } catch (conversionError) {
           console.error('Audio conversion failed:', conversionError);
@@ -1079,6 +1079,20 @@ router.get('/audio/:videoId', async (req, res) => {
         }
       });
     });
+    
+    // Handle the promise and send response
+    try {
+      const result = await downloadPromise;
+      res.json(result);
+    } catch (downloadError) {
+      console.error('❌ Download process failed:', downloadError);
+      return res.status(500).json({
+        error: 'Audio download failed',
+        details: downloadError.message,
+        videoId: videoId,
+        suggestion: 'This video may not support audio extraction or may be region-restricted.'
+      });
+    }
     
   } catch (error) {
     console.error('Audio download error:', error);

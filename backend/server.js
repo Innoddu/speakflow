@@ -35,8 +35,36 @@ app.get('/api/health', (req, res) => {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong!' });
+  console.error('❌ Global error handler caught:', err);
+  console.error('Error details:', {
+    message: err.message,
+    stack: err.stack,
+    url: req.url,
+    method: req.method,
+    body: req.body,
+    params: req.params
+  });
+  
+  // If response was already sent, delegate to default Express error handler
+  if (res.headersSent) {
+    return next(err);
+  }
+  
+  // Provide more specific error information
+  const errorResponse = {
+    error: 'Internal server error',
+    message: err.message || 'An unexpected error occurred',
+    path: req.url,
+    method: req.method,
+    timestamp: new Date().toISOString()
+  };
+  
+  // In development, include stack trace
+  if (process.env.NODE_ENV === 'development') {
+    errorResponse.stack = err.stack;
+  }
+  
+  res.status(500).json(errorResponse);
 });
 
 // Connect to MongoDB (if using)
