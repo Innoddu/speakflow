@@ -5,6 +5,7 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const s3Service = require('../services/s3Service');
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -59,19 +60,32 @@ if (!fs.existsSync(whisperCacheDir)) {
   fs.mkdirSync(whisperCacheDir, { recursive: true });
 }
 
-// Quick cache existence check
+// Quick cache existence check (check both local and S3)
 router.get('/cache-exists/:videoId', async (req, res) => {
   try {
     const { videoId } = req.params;
     const cacheFilePath = path.join(whisperCacheDir, `${videoId}.json`);
     
-    const exists = fs.existsSync(cacheFilePath);
+    // Check local cache first
+    const localExists = fs.existsSync(cacheFilePath);
+    
+    // Check S3 cache
+    let s3Exists = false;
+    try {
+      s3Exists = await s3Service.whisperCacheExists(videoId);
+    } catch (s3Error) {
+      console.log('S3 cache check failed:', s3Error.message);
+    }
+    
+    const exists = localExists || s3Exists;
     
     res.json({ 
       exists,
       videoId,
       cached: exists,
-      ...(exists && { cachedAt: fs.statSync(cacheFilePath).mtime })
+      localCache: localExists,
+      s3Cache: s3Exists,
+      ...(localExists && { localCachedAt: fs.statSync(cacheFilePath).mtime })
     });
   } catch (error) {
     console.error('❌ Cache existence check error:', error);
@@ -79,31 +93,60 @@ router.get('/cache-exists/:videoId', async (req, res) => {
   }
 });
 
-// Get cached Whisper result by video ID
+// Get cached Whisper result by video ID (check both local and S3)
 router.get('/cached/:videoId', async (req, res) => {
   try {
     const { videoId } = req.params;
     const cacheFilePath = path.join(whisperCacheDir, `${videoId}.json`);
     
+    // Try local cache first
     if (fs.existsSync(cacheFilePath)) {
-      console.log('✅ Whisper: Found cached result for video:', videoId);
+      console.log('✅ Whisper: Found cached result locally for video:', videoId);
       const cachedData = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'));
       
       return res.json({
         ...cachedData,
         cached: true,
+        source: 'local',
         cachedAt: fs.statSync(cacheFilePath).mtime
       });
-    } else {
-      return res.status(404).json({ error: 'No cached result found' });
     }
+    
+    // Try S3 cache if local not found
+    try {
+      const s3CacheExists = await s3Service.whisperCacheExists(videoId);
+      if (s3CacheExists) {
+        console.log('✅ Whisper: Found cached result in S3 for video:', videoId);
+        const cachedData = await s3Service.getWhisperCache(videoId);
+        
+        // Save to local cache for faster access next time
+        try {
+          fs.writeFileSync(cacheFilePath, JSON.stringify(cachedData, null, 2));
+          console.log('💾 Whisper: S3 cache saved locally for video:', videoId);
+        } catch (localSaveError) {
+          console.warn('⚠️ Failed to save S3 cache locally:', localSaveError.message);
+        }
+        
+        return res.json({
+          ...cachedData,
+          cached: true,
+          source: 's3',
+          cachedAt: new Date().toISOString()
+        });
+      }
+    } catch (s3Error) {
+      console.log('S3 cache retrieval failed:', s3Error.message);
+    }
+    
+    // No cache found
+    return res.status(404).json({ error: 'No cached result found' });
   } catch (error) {
     console.error('❌ Cache retrieval error:', error);
     res.status(500).json({ error: 'Failed to retrieve cached result' });
   }
 });
 
-// Transcribe audio with Whisper AI (with caching)
+// Transcribe audio with Whisper AI (with S3 caching)
 router.post('/transcribe', upload.single('audio'), async (req, res) => {
   try {
     if (!req.file) {
@@ -113,11 +156,13 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
     // Extract video ID from filename if available
     const videoId = req.body.videoId || req.file.originalname.replace(/[^a-zA-Z0-9_-]/g, '');
     
-    // Check cache first
+    // Check cache first (both local and S3)
     if (videoId) {
       const cacheFilePath = path.join(whisperCacheDir, `${videoId}.json`);
+      
+      // Check local cache
       if (fs.existsSync(cacheFilePath)) {
-        console.log('🎯 Whisper: Using cached result for video:', videoId);
+        console.log('🎯 Whisper: Using local cached result for video:', videoId);
         
         // Clean up uploaded file
         fs.unlinkSync(req.file.path);
@@ -126,8 +171,39 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
         return res.json({
           ...cachedData,
           cached: true,
+          source: 'local',
           cachedAt: fs.statSync(cacheFilePath).mtime
         });
+      }
+      
+      // Check S3 cache
+      try {
+        const s3CacheExists = await s3Service.whisperCacheExists(videoId);
+        if (s3CacheExists) {
+          console.log('🎯 Whisper: Using S3 cached result for video:', videoId);
+          
+          // Clean up uploaded file
+          fs.unlinkSync(req.file.path);
+          
+          const cachedData = await s3Service.getWhisperCache(videoId);
+          
+          // Save to local cache for faster access next time
+          try {
+            fs.writeFileSync(cacheFilePath, JSON.stringify(cachedData, null, 2));
+            console.log('💾 Whisper: S3 cache saved locally for video:', videoId);
+          } catch (localSaveError) {
+            console.warn('⚠️ Failed to save S3 cache locally:', localSaveError.message);
+          }
+          
+          return res.json({
+            ...cachedData,
+            cached: true,
+            source: 's3',
+            cachedAt: new Date().toISOString()
+          });
+        }
+      } catch (s3Error) {
+        console.log('S3 cache check failed:', s3Error.message);
       }
     }
 
@@ -189,15 +265,25 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
       sentences: processedSentences,
       duration: transcription.duration,
       cached: false,
+      source: 'new',
       processedAt: new Date().toISOString()
     };
 
     // Save to cache if videoId is available
     if (videoId) {
       try {
+        // Save to local cache
         const cacheFilePath = path.join(whisperCacheDir, `${videoId}.json`);
         fs.writeFileSync(cacheFilePath, JSON.stringify(result, null, 2));
-        console.log('💾 Whisper: Result cached for video:', videoId);
+        console.log('💾 Whisper: Result cached locally for video:', videoId);
+        
+        // Save to S3 cache for production deployment
+        try {
+          await s3Service.uploadWhisperCache(videoId, result);
+          console.log('☁️ Whisper: Result cached in S3 for video:', videoId);
+        } catch (s3Error) {
+          console.warn('⚠️ Failed to cache Whisper result in S3:', s3Error.message);
+        }
       } catch (cacheError) {
         console.error('⚠️ Failed to cache Whisper result:', cacheError);
         // Don't fail the request if caching fails

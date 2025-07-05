@@ -1,15 +1,39 @@
+import { Platform } from 'react-native';
+
+// Environment detection
+const isDevelopment = __DEV__;
+
+// Get the appropriate base URL based on environment
+const getBaseUrl = () => {
+  if (isDevelopment) {
+    // Development environment
+    if (Platform.OS === 'web') {
+      return 'http://localhost:5030/api';
+    } else {
+      // For iOS/Android simulators/devices, use your computer's IP
+      // You can also use 'http://localhost:5030/api' if using Expo tunneling
+      return 'http://192.168.25.36:5030/api';
+    }
+  } else {
+    // Production environment
+    return 'https://speakflow-production.up.railway.app/api';
+  }
+};
+
 // API Configuration
 export const API_CONFIG = {
-  // Change this to your backend server URL
-  // For local development: Use your computer's IP address
-  // For production: 'https://your-backend-domain.com/api'
-  BASE_URL: 'https://speakflow-production.up.railway.app/api',
+  // Automatically switch between development and production URLs
+  BASE_URL: getBaseUrl(),
   
   // API timeout in milliseconds
   TIMEOUT: 120000, // Increased to 120 seconds for audio conversion
   
   // Retry attempts for failed requests
   RETRY_ATTEMPTS: 3,
+  
+  // Environment info for debugging
+  IS_DEVELOPMENT: isDevelopment,
+  PLATFORM: Platform.OS,
 };
 
 // YouTube API Configuration
@@ -25,4 +49,11 @@ export const YOUTUBE_CONFIG = {
   
   // Ideal duration for learning (in minutes)
   IDEAL_DURATION_MINUTES: 6,
-}; 
+};
+
+// Log current configuration for debugging
+console.log('🔧 API Configuration:', {
+  baseUrl: API_CONFIG.BASE_URL,
+  isDevelopment: API_CONFIG.IS_DEVELOPMENT,
+  platform: API_CONFIG.PLATFORM,
+}); 

@@ -168,6 +168,95 @@ class S3Service {
       console.error('Error cleaning up local file:', error);
     }
   }
+
+  /**
+   * Check if whisper cache file exists in S3
+   * @param {string} videoId - YouTube video ID
+   * @returns {Promise<boolean>}
+   */
+  async whisperCacheExists(videoId) {
+    try {
+      const params = {
+        Bucket: this.bucketName,
+        Key: `cache/whisper/${videoId}.json`,
+      };
+
+      const command = new HeadObjectCommand(params);
+      await this.s3Client.send(command);
+      return true;
+    } catch (error) {
+      if (error.name === 'NotFound') {
+        return false;
+      }
+      console.error('Error checking whisper cache existence:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get whisper cache from S3
+   * @param {string} videoId - YouTube video ID
+   * @returns {Promise<object>} Cached whisper data
+   */
+  async getWhisperCache(videoId) {
+    try {
+      const params = {
+        Bucket: this.bucketName,
+        Key: `cache/whisper/${videoId}.json`,
+      };
+
+      const command = new GetObjectCommand(params);
+      const response = await this.s3Client.send(command);
+      
+      // Convert stream to string
+      const chunks = [];
+      for await (const chunk of response.Body) {
+        chunks.push(chunk);
+      }
+      const jsonString = Buffer.concat(chunks).toString('utf-8');
+      
+      console.log(`Whisper cache retrieved from S3: cache/whisper/${videoId}.json`);
+      return JSON.parse(jsonString);
+    } catch (error) {
+      console.error('Error getting whisper cache from S3:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Upload whisper cache to S3
+   * @param {string} videoId - YouTube video ID
+   * @param {object} cacheData - Whisper cache data
+   * @returns {Promise<string>} S3 object key
+   */
+  async uploadWhisperCache(videoId, cacheData) {
+    try {
+      const fileName = `${videoId}.json`;
+      const jsonContent = JSON.stringify(cacheData, null, 2);
+      
+      const uploadParams = {
+        Bucket: this.bucketName,
+        Key: `cache/whisper/${fileName}`,
+        Body: jsonContent,
+        ContentType: 'application/json',
+        CacheControl: 'max-age=31536000', // 1 year cache
+        Metadata: {
+          'video-id': videoId,
+          'upload-date': new Date().toISOString(),
+          'cache-type': 'whisper',
+        },
+      };
+
+      const command = new PutObjectCommand(uploadParams);
+      const result = await this.s3Client.send(command);
+      
+      console.log(`Whisper cache uploaded to S3: cache/whisper/${fileName}`);
+      return `cache/whisper/${fileName}`;
+    } catch (error) {
+      console.error('S3 whisper cache upload error:', error);
+      throw new Error(`Failed to upload whisper cache to S3: ${error.message}`);
+    }
+  }
 }
 
 module.exports = new S3Service(); 
