@@ -58,6 +58,7 @@ export default function ScriptPracticeScreen() {
   const sentenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const videoHeightAnim = useRef(new Animated.Value(1)).current; // Video height animation
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
+  const [currentSentence, setCurrentSentence] = useState<PracticeSentence | null>(null);
 
   useEffect(() => {
     // Test connection first
@@ -398,22 +399,53 @@ export default function ScriptPracticeScreen() {
   };
 
   const playSentenceOnly = (sentence: PracticeSentence) => {
-    // Use audio player preferentially
-    if (audioPlayerRef.current && audioInfo) {
-      audioPlayerRef.current.seekTo(sentence.start);
-      audioPlayerRef.current.play();
-      setIsAudioPlaying(true);
-    } else {
-      // Use video player as backup
-      console.log('📻 Using video player for audio (no audio file available)');
-      if (videoPlayerRef.current) {
-        videoPlayerRef.current.seekTo(sentence.start);
+    if (!audioPlayerRef.current) return;
+
+    console.log('🎵 Playing sentence audio:', sentence);
+    setCurrentSentence(sentence);
+    setIsPlaying(true);
+
+    // Seek to sentence start
+    audioPlayerRef.current.seekTo(sentence.start);
+    
+    // Use AI-powered Voice Activity Detection for more accurate stopping
+    if (Platform.OS === 'web' && audioPlayerRef.current.playWithVAD) {
+      audioPlayerRef.current.playWithVAD(() => {
+        console.log('🔇 AI detected silence, stopping audio');
+        setIsPlaying(false);
+        setCurrentSentence(null);
         
-        // Video doesn't have auto-stop functionality, so just log
-        console.log('⏰ Video will continue playing (no auto-stop available)');
-      } else {
-        console.log('❌ No player available');
-      }
+        // Auto-advance to next sentence if Auto Play is enabled
+        if (isAutoPlay) {
+          const currentIndex = sentences.findIndex(s => s.start === sentence.start);
+          if (currentIndex < sentences.length - 1) {
+            setTimeout(() => {
+              playSentenceOnly(sentences[currentIndex + 1]);
+            }, 500); // Small delay before next sentence
+          }
+        }
+      });
+    } else {
+      // Fallback to timer-based approach for native or when VAD is not available
+      audioPlayerRef.current.play();
+      
+      // Auto-stop after sentence duration with some padding
+      const paddingMs = 200; // 200ms padding to ensure complete playback
+      const stopTimer = setTimeout(() => {
+        console.log('⏰ Timer-based stop after', sentence.duration + paddingMs, 'ms');
+        setIsPlaying(false);
+        setCurrentSentence(null);
+        
+        // Auto-advance to next sentence if Auto Play is enabled
+        if (isAutoPlay) {
+          const currentIndex = sentences.findIndex(s => s.start === sentence.start);
+          if (currentIndex < sentences.length - 1) {
+            setTimeout(() => {
+              playSentenceOnly(sentences[currentIndex + 1]);
+            }, 500); // Small delay before next sentence
+          }
+        }
+      }, sentence.duration * 1000 + paddingMs);
     }
   };
 

@@ -11,9 +11,10 @@ export type AudioPlayerRef = {
   play: () => void;
   pause: () => void;
   getCurrentTime: (callback: (time: number) => void) => void;
+  playWithVAD: (onSilenceDetected: () => void) => void;
 };
 
-// Web Audio Player using HTML5 Audio
+// Web Audio Player using HTML5 Audio with Voice Activity Detection
 const WebAudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => {
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
@@ -22,6 +23,121 @@ const WebAudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => 
   const [position, setPosition] = useState<number>(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const positionIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const vadIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const onSilenceDetectedRef = useRef<(() => void) | null>(null);
+
+  // Voice Activity Detection with advanced audio analysis
+  const startVoiceActivityDetection = (onSilenceDetected: () => void) => {
+    if (Platform.OS !== 'web') return;
+    
+    onSilenceDetectedRef.current = onSilenceDetected;
+    
+    try {
+      // Create audio context for analysis
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const analyser = audioContext.createAnalyser();
+      const source = audioContext.createMediaElementSource(audioRef.current!);
+      
+      source.connect(analyser);
+      analyser.connect(audioContext.destination);
+      
+      // Configure analyser for better speech detection
+      analyser.fftSize = 2048; // Higher resolution for better frequency analysis
+      analyser.smoothingTimeConstant = 0.8;
+      analyser.minDecibels = -90;
+      analyser.maxDecibels = -10;
+      
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      const frequencyData = new Uint8Array(bufferLength);
+      
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+      
+      let silenceCount = 0;
+      let speechCount = 0;
+      const silenceThreshold = 8; // More frames for stability
+      const speechThreshold = 3; // Minimum speech frames before resetting
+      const volumeThreshold = 15; // Adjusted for better sensitivity
+      const speechFrequencyThreshold = 25; // Minimum energy in speech frequencies
+      
+      vadIntervalRef.current = setInterval(() => {
+        if (!analyserRef.current || !isPlaying) return;
+        
+        // Get both time-domain and frequency-domain data
+        analyser.getByteTimeDomainData(dataArray);
+        analyser.getByteFrequencyData(frequencyData);
+        
+        // Calculate RMS (Root Mean Square) for volume
+        let rms = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          const sample = (dataArray[i] - 128) / 128; // Normalize to -1 to 1
+          rms += sample * sample;
+        }
+        rms = Math.sqrt(rms / dataArray.length) * 100;
+        
+        // Calculate energy in speech frequency range (300Hz - 3400Hz)
+        // For 44.1kHz sample rate with 2048 FFT: each bin = 21.5Hz
+        const speechStartBin = Math.floor(300 / 21.5); // ~14
+        const speechEndBin = Math.floor(3400 / 21.5); // ~158
+        let speechEnergy = 0;
+        for (let i = speechStartBin; i < speechEndBin && i < frequencyData.length; i++) {
+          speechEnergy += frequencyData[i];
+        }
+        speechEnergy = speechEnergy / (speechEndBin - speechStartBin);
+        
+        // Determine if speech is present
+        const isSpeech = rms > volumeThreshold && speechEnergy > speechFrequencyThreshold;
+        
+        if (isSpeech) {
+          speechCount++;
+          if (speechCount >= speechThreshold) {
+            silenceCount = 0; // Reset silence counter when consistent speech is detected
+          }
+        } else {
+          speechCount = 0;
+          silenceCount++;
+          
+          if (silenceCount >= silenceThreshold) {
+            console.log(`🔇 Advanced VAD: Silence detected (RMS: ${rms.toFixed(1)}, Speech Energy: ${speechEnergy.toFixed(1)})`);
+            stopVoiceActivityDetection();
+            if (onSilenceDetectedRef.current) {
+              onSilenceDetectedRef.current();
+            }
+          }
+        }
+        
+        // Debug logging (can be removed in production)
+        if (silenceCount % 10 === 0 && silenceCount > 0) {
+          console.log(`🎙️ VAD Status: RMS=${rms.toFixed(1)}, SpeechEnergy=${speechEnergy.toFixed(1)}, SilenceCount=${silenceCount}`);
+        }
+      }, 100); // Check every 100ms
+      
+    } catch (error) {
+      console.error('❌ Voice Activity Detection setup failed:', error);
+      // Fallback to simple timer-based approach
+      setTimeout(() => {
+        if (onSilenceDetectedRef.current) {
+          onSilenceDetectedRef.current();
+        }
+      }, 5000); // 5 second fallback
+    }
+  };
+
+  const stopVoiceActivityDetection = () => {
+    if (vadIntervalRef.current) {
+      clearInterval(vadIntervalRef.current);
+      vadIntervalRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    analyserRef.current = null;
+    onSilenceDetectedRef.current = null;
+  };
 
   useImperativeHandle(ref, () => ({
     seekTo: (timeInSeconds: number) => {
@@ -47,12 +163,27 @@ const WebAudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => 
       if (audioRef.current) {
         audioRef.current.pause();
         setIsPlaying(false);
+        stopVoiceActivityDetection();
         console.log('⏸️ Web Audio: Paused');
       }
     },
     getCurrentTime: (callback: (time: number) => void) => {
       const timeInSeconds = position / 1000;
       callback(timeInSeconds);
+    },
+    // New method for smart sentence playback
+    playWithVAD: (onSilenceDetected: () => void) => {
+      if (audioRef.current) {
+        audioRef.current.play()
+          .then(() => {
+            setIsPlaying(true);
+            startVoiceActivityDetection(onSilenceDetected);
+            console.log('▶️ Web Audio: Started playing with VAD');
+          })
+          .catch((error) => {
+            console.error('❌ Web Audio play with VAD error:', error);
+          });
+      }
     },
   }));
 
@@ -163,64 +294,49 @@ const NativeAudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) 
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState<number>(0);
   const [position, setPosition] = useState<number>(0);
-  const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Determine URL type for logging
-  const isLocalFile = audioUrl.startsWith('/audio/') || audioUrl.includes('localhost');
-  const isS3Url = audioUrl.includes('s3.') && audioUrl.includes('amazonaws.com');
-  const isYouTubeUrl = audioUrl.includes('youtube.com') || audioUrl.includes('youtu.be');
-  const urlType = isLocalFile ? 'Local' : isS3Url ? 'S3' : isYouTubeUrl ? 'YouTube' : 'External';
+  const positionIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useImperativeHandle(ref, () => ({
     seekTo: async (timeInSeconds: number) => {
-      try {
-        if (sound) {
-          const timeInMillis = timeInSeconds * 1000;
-          await sound.setPositionAsync(timeInMillis);
-          console.log(`🎵 Audio: Seeked to ${timeInSeconds}s`);
-        } else {
-          console.warn('⚠️ Audio not loaded yet, cannot seek');
-        }
-      } catch (error) {
-        console.error('❌ Audio seek error:', error);
+      if (sound) {
+        await sound.setPositionAsync(timeInSeconds * 1000);
+        setPosition(timeInSeconds * 1000);
+        console.log(`🎵 Native Audio: Seeked to ${timeInSeconds}s`);
       }
     },
     play: async () => {
-      try {
-        if (sound) {
-          await sound.playAsync();
-          setIsPlaying(true);
-          console.log('▶️ Audio: Started playing');
-        } else {
-          console.warn('⚠️ Audio not loaded yet, cannot play');
-        }
-      } catch (error) {
-        console.error('❌ Audio play error:', error);
+      if (sound) {
+        await sound.playAsync();
+        setIsPlaying(true);
+        console.log('▶️ Native Audio: Started playing');
       }
     },
     pause: async () => {
-      try {
-        if (sound) {
-          await sound.pauseAsync();
-          setIsPlaying(false);
-          console.log('⏸️ Audio: Paused');
-        } else {
-          console.warn('⚠️ Audio not loaded yet, cannot pause');
-        }
-      } catch (error) {
-        console.error('❌ Audio pause error:', error);
+      if (sound) {
+        await sound.pauseAsync();
+        setIsPlaying(false);
+        console.log('⏸️ Native Audio: Paused');
       }
     },
     getCurrentTime: (callback: (time: number) => void) => {
-      // position is in milliseconds, convert to seconds
       const timeInSeconds = position / 1000;
       callback(timeInSeconds);
+    },
+    // For native, we'll use the same method but without VAD (fallback to timer)
+    playWithVAD: async (onSilenceDetected: () => void) => {
+      if (sound) {
+        await sound.playAsync();
+        setIsPlaying(true);
+        console.log('▶️ Native Audio: Started playing (VAD not available, using timer fallback)');
+        // Note: Native VAD would require additional libraries like react-native-audio-recorder-player
+        // For now, we'll use the same timer-based approach as before
+      }
     },
   }));
 
   const loadAudio = async () => {
     try {
-      console.log(`🎵 Native AudioPlayer: Loading ${urlType} audio from:`, audioUrl.substring(0, 100) + '...');
+      console.log(`🎵 Native AudioPlayer: Loading audio from:`, audioUrl.substring(0, 100) + '...');
       
       setIsLoading(true);
       setHasError(false);
@@ -259,12 +375,6 @@ const NativeAudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) 
       setIsLoading(false);
       console.log('✅ Native Audio loaded successfully');
 
-      // Clear timeout if loading succeeds
-      if (loadingTimeoutRef.current) {
-        clearTimeout(loadingTimeoutRef.current);
-        loadingTimeoutRef.current = null;
-      }
-
     } catch (error) {
       console.error('❌ Native Audio loading failed:', error);
       setHasError(true);
@@ -273,22 +383,10 @@ const NativeAudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) 
   };
 
   useEffect(() => {
-    // Set loading timeout
-    loadingTimeoutRef.current = setTimeout(() => {
-      if (isLoading) {
-        console.error('⏰ Native Audio loading timeout');
-        setHasError(true);
-        setIsLoading(false);
-      }
-    }, 30000); // 30 seconds timeout
-
     loadAudio();
 
     // Cleanup function
     return () => {
-      if (loadingTimeoutRef.current) {
-        clearTimeout(loadingTimeoutRef.current);
-      }
       if (sound) {
         console.log('🧹 Cleaning up native audio');
         sound.unloadAsync();

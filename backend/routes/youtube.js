@@ -9,6 +9,7 @@ const natural = require('natural');
 const ytdl = require('@distube/ytdl-core');
 const s3Service = require('../services/s3Service');
 const youtubeCaptions = require('../services/youtube-captions');
+const { extractCaptionsWithYtDlp, extractCaptionsWithAPI, mergeCaptionsIntoSentences, enhanceSentenceBoundaries } = require('../services/youtube-captions');
 
 // Create audio directory if it doesn't exist
 const audioDir = path.join(__dirname, '..', 'public', 'audio');
@@ -1100,6 +1101,105 @@ router.get('/debug/test', (req, res) => {
       hasOpenAI: !!process.env.OPENAI_API_KEY
     }
   });
+});
+
+// YouTube transcript practice endpoint
+router.post('/transcript-practice', async (req, res) => {
+  try {
+    const { videoId } = req.body;
+    
+    if (!videoId) {
+      return res.status(400).json({ 
+        error: 'Video ID is required',
+        details: 'Please provide a valid YouTube video ID'
+      });
+    }
+
+    console.log(`🎬 Processing YouTube video: ${videoId}`);
+
+    // Try multiple methods for caption extraction
+    let captions = null;
+    let method = 'unknown';
+    
+    // Method 1: yt-dlp (most reliable)
+    try {
+      console.log('🔄 Trying yt-dlp method...');
+      captions = await extractCaptionsWithYtDlp(videoId);
+      method = 'yt-dlp';
+      console.log(`✅ yt-dlp method successful: ${captions.length} captions`);
+    } catch (ytDlpError) {
+      console.log('❌ yt-dlp method failed:', ytDlpError.message);
+    }
+
+    // Method 2: YouTube Data API v3 (requires OAuth2)
+    if (!captions && process.env.YOUTUBE_ACCESS_TOKEN) {
+      try {
+        console.log('🔄 Trying YouTube Data API v3...');
+        captions = await extractCaptionsWithAPI(videoId);
+        method = 'youtube-api-v3';
+        console.log(`✅ YouTube API v3 method successful: ${captions.length} captions`);
+      } catch (apiError) {
+        console.log('❌ YouTube API v3 method failed:', apiError.message);
+      }
+    }
+
+    // Method 3: youtube-captions-scraper (fallback)
+    if (!captions) {
+      try {
+        console.log('🔄 Trying youtube-captions-scraper...');
+        captions = await getSubtitles({ videoID: videoId, lang: 'en' });
+        method = 'youtube-captions-scraper';
+        console.log(`✅ youtube-captions-scraper method successful: ${captions.length} captions`);
+      } catch (scraperError) {
+        console.log('❌ youtube-captions-scraper method failed:', scraperError.message);
+      }
+    }
+
+    if (!captions || captions.length === 0) {
+      return res.status(404).json({ 
+        error: 'No subtitles found',
+        details: 'This video may not have English subtitles available. Look for the CC (Closed Captions) icon on the video player, or try a different video with subtitles.',
+        suggestions: [
+          'Make sure the video has English subtitles (CC icon visible)',
+          'Try videos from educational channels like TED, Khan Academy, or BBC',
+          'Check if auto-generated subtitles are available'
+        ]
+      });
+    }
+
+    // Merge captions into sentences
+    const sentences = mergeCaptionsIntoSentences(captions);
+    
+    // Apply AI-based sentence boundary enhancement
+    const enhancedSentences = enhanceSentenceBoundaries(sentences);
+    
+    console.log(`📝 Enhanced ${enhancedSentences.length} sentences with AI analysis`);
+
+    // Generate practice script
+    const practiceScript = {
+      videoId,
+      title: `YouTube Video Practice - ${videoId}`,
+      sentences: enhancedSentences,
+      totalDuration: enhancedSentences.reduce((sum, s) => sum + s.duration, 0),
+      extractionMethod: method,
+      aiEnhanced: true,
+      confidence: enhancedSentences.reduce((sum, s) => sum + s.confidence, 0) / enhancedSentences.length
+    };
+
+    res.json(practiceScript);
+
+  } catch (error) {
+    console.error('❌ YouTube transcript practice error:', error);
+    res.status(500).json({ 
+      error: 'Failed to process video',
+      details: error.message,
+      suggestions: [
+        'Check if the video ID is correct',
+        'Ensure the video has English subtitles',
+        'Try again in a few moments'
+      ]
+    });
+  }
 });
 
 module.exports = router;

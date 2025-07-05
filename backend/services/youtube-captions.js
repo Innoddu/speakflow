@@ -402,6 +402,150 @@ function cleanupTempDir(tempDir) {
   }
 }
 
+// Enhanced sentence boundary detection using AI analysis
+function enhanceSentenceBoundaries(sentences) {
+  console.log('🤖 Enhancing sentence boundaries with AI analysis...');
+  
+  return sentences.map((sentence, index) => {
+    const nextSentence = sentences[index + 1];
+    
+    // Calculate natural pause duration based on sentence characteristics
+    const pauseDuration = calculateNaturalPause(sentence, nextSentence);
+    
+    // Adjust sentence duration based on content analysis
+    const adjustedDuration = adjustDurationForContent(sentence, pauseDuration);
+    
+    return {
+      ...sentence,
+      duration: adjustedDuration,
+      originalDuration: sentence.duration,
+      pauseDuration: pauseDuration,
+      confidence: calculateConfidence(sentence)
+    };
+  });
+}
+
+// Calculate natural pause duration based on sentence characteristics
+function calculateNaturalPause(sentence, nextSentence) {
+  const text = sentence.text.trim();
+  
+  // Base pause duration (in seconds)
+  let pauseDuration = 0.3;
+  
+  // Longer pause for sentence endings with punctuation
+  if (text.endsWith('.') || text.endsWith('!') || text.endsWith('?')) {
+    pauseDuration += 0.4;
+  }
+  
+  // Shorter pause for commas or continuing thoughts
+  if (text.endsWith(',') || text.endsWith(';') || text.endsWith(':')) {
+    pauseDuration += 0.2;
+  }
+  
+  // Longer pause for paragraph breaks or topic changes
+  if (nextSentence && isTopicChange(sentence, nextSentence)) {
+    pauseDuration += 0.6;
+  }
+  
+  // Adjust based on sentence length (longer sentences need more processing time)
+  const wordCount = text.split(/\s+/).length;
+  if (wordCount > 15) {
+    pauseDuration += 0.2;
+  }
+  
+  return pauseDuration;
+}
+
+// Adjust duration based on content analysis
+function adjustDurationForContent(sentence, pauseDuration) {
+  const text = sentence.text.trim();
+  const wordCount = text.split(/\s+/).length;
+  
+  // Estimate speaking rate (words per minute)
+  const averageWPM = 150; // Average English speaking rate
+  const estimatedDuration = (wordCount / averageWPM) * 60; // Convert to seconds
+  
+  // Use the longer of: original duration or estimated duration
+  const baseDuration = Math.max(sentence.duration, estimatedDuration);
+  
+  // Add natural pause
+  const totalDuration = baseDuration + pauseDuration;
+  
+  // Apply content-based adjustments
+  let adjustmentFactor = 1.0;
+  
+  // Slower for complex sentences
+  if (text.includes(',') && text.includes('which') || text.includes('that')) {
+    adjustmentFactor += 0.15; // 15% slower for complex sentences
+  }
+  
+  // Slower for technical terms or difficult words
+  if (hasComplexWords(text)) {
+    adjustmentFactor += 0.1; // 10% slower for complex vocabulary
+  }
+  
+  // Faster for simple, common phrases
+  if (isSimplePhrase(text)) {
+    adjustmentFactor -= 0.1; // 10% faster for simple phrases
+  }
+  
+  return totalDuration * adjustmentFactor;
+}
+
+// Detect topic changes between sentences
+function isTopicChange(sentence1, sentence2) {
+  const text1 = sentence1.text.toLowerCase();
+  const text2 = sentence2.text.toLowerCase();
+  
+  // Simple topic change indicators
+  const topicChangeWords = ['now', 'next', 'however', 'meanwhile', 'furthermore', 'in addition', 'on the other hand'];
+  
+  return topicChangeWords.some(word => text2.startsWith(word));
+}
+
+// Check for complex words that might require slower speech
+function hasComplexWords(text) {
+  const complexWords = ['ということ', 'specifically', 'particularly', 'furthermore', 'nevertheless', 'consequently'];
+  const words = text.toLowerCase().split(/\s+/);
+  
+  // Check for long words (>8 characters) or complex terms
+  return words.some(word => word.length > 8 || complexWords.includes(word));
+}
+
+// Check for simple, common phrases
+function isSimplePhrase(text) {
+  const simplePatterns = [
+    /^(yes|no|okay|alright|sure|of course)$/i,
+    /^(hello|hi|hey|goodbye|bye)$/i,
+    /^(thank you|thanks|please|sorry)$/i
+  ];
+  
+  return simplePatterns.some(pattern => pattern.test(text.trim()));
+}
+
+// Calculate confidence score for the sentence boundary
+function calculateConfidence(sentence) {
+  const text = sentence.text.trim();
+  let confidence = 0.5; // Base confidence
+  
+  // Higher confidence for sentences with clear punctuation
+  if (text.endsWith('.') || text.endsWith('!') || text.endsWith('?')) {
+    confidence += 0.3;
+  }
+  
+  // Higher confidence for complete sentences
+  if (text.split(/\s+/).length >= 3) {
+    confidence += 0.2;
+  }
+  
+  // Lower confidence for fragments or incomplete sentences
+  if (text.length < 10 || !text.match(/[a-zA-Z]/)) {
+    confidence -= 0.3;
+  }
+  
+  return Math.max(0, Math.min(1, confidence));
+}
+
 module.exports = {
   getCaptions,
   extractCaptionsWithYtDlp,
@@ -409,5 +553,8 @@ module.exports = {
   parseSRTContent,
   formatCaptionsForFrontend,
   extractAudioWithYtDlp,
-  cleanupTempDir
+  cleanupTempDir,
+  extractCaptionsWithAPI,
+  mergeCaptionsIntoSentences,
+  enhanceSentenceBoundaries
 }; 
