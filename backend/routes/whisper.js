@@ -426,108 +426,136 @@ function processSentencesFromWhisper(transcription) {
   return filteredSentences;
 }
 
-// Get YouTube subtitles (fallback) - Updated to use YouTube Data API v3
+// Get YouTube subtitles (fallback) - Updated to use yt-dlp with multiple fallbacks
 router.get('/youtube-subtitles/:videoId', async (req, res) => {
   try {
     const { videoId } = req.params;
     console.log('📺 Fetching YouTube subtitles for:', videoId);
 
-    // Import YouTube API (from youtube.js route)
-    const { google } = require('googleapis');
-    const youtube = google.youtube({
-      version: 'v3',
-      auth: process.env.YOUTUBE_API_KEY
-    });
-
-    // Step 1: Get caption tracks using YouTube Data API v3
-    const captionsResponse = await youtube.captions.list({
-      part: 'snippet',
-      videoId: videoId
-    });
+    // Import the new YouTube captions service
+    const { getCaptions } = require('../services/youtube-captions');
     
-    const captionTracks = captionsResponse.data.items || [];
-    console.log(`📝 Found ${captionTracks.length} caption tracks`);
-    
-    // Find English captions (prefer manual over auto-generated)
-    const manualEnglish = captionTracks.find(track => 
-      track.snippet.language === 'en' && track.snippet.trackKind === 'standard'
-    );
-    const autoEnglish = captionTracks.find(track => 
-      track.snippet.language === 'en' && track.snippet.trackKind === 'ASR'
-    );
-    
-    const selectedTrack = manualEnglish || autoEnglish;
-    
-    if (!selectedTrack) {
-      console.log('❌ No English captions found via API');
+    // Try the new yt-dlp service first
+    try {
+      console.log('🚀 Trying yt-dlp caption extraction...');
+      const captionResult = await getCaptions(videoId, 'en');
       
-      // Fallback to old scraper method
-      try {
-        const { getSubtitles } = require('youtube-captions-scraper');
-        const subtitles = await getSubtitles({
-          videoID: videoId,
-          lang: 'en'
+      if (captionResult.success && captionResult.captions.length > 0) {
+        console.log(`✅ yt-dlp success: ${captionResult.captions.length} captions`);
+        
+        // Convert to the format expected by frontend
+        const processedSentences = captionResult.captions.map(caption => ({
+          text: caption.text,
+          start: caption.start,
+          end: caption.start + caption.dur,
+          duration: caption.dur
+        }));
+        
+        return res.json({
+          success: true,
+          source: captionResult.method,
+          sentences: processedSentences,
+          captionCount: captionResult.count,
+          raw: captionResult.captions
         });
+      }
+    } catch (ytdlpError) {
+      console.error('yt-dlp failed:', ytdlpError.message);
+      console.log('🔄 Falling back to YouTube Data API v3...');
+    }
 
-        if (subtitles && subtitles.length > 0) {
-          console.log('✅ Fallback scraper found subtitles:', subtitles.length, 'entries');
-          const processedSentences = processYouTubeSubtitles(subtitles);
+    // Fallback 1: YouTube Data API v3
+    try {
+      const { google } = require('googleapis');
+      const youtube = google.youtube({
+        version: 'v3',
+        auth: process.env.YOUTUBE_API_KEY
+      });
+
+      // Step 1: Get caption tracks using YouTube Data API v3
+      const captionsResponse = await youtube.captions.list({
+        part: 'snippet',
+        videoId: videoId
+      });
+      
+      const captionTracks = captionsResponse.data.items || [];
+      console.log(`📝 Found ${captionTracks.length} caption tracks via API`);
+      
+      // Find English captions (prefer manual over auto-generated)
+      const manualEnglish = captionTracks.find(track => 
+        track.snippet.language === 'en' && track.snippet.trackKind === 'standard'
+      );
+      const autoEnglish = captionTracks.find(track => 
+        track.snippet.language === 'en' && track.snippet.trackKind === 'ASR'
+      );
+      
+      const selectedTrack = manualEnglish || autoEnglish;
+      
+      if (selectedTrack) {
+        console.log(`✅ Using ${selectedTrack.snippet.trackKind} English captions via API`);
+        
+        // Step 2: Download caption content
+        const captionId = selectedTrack.id;
+        const captionDownloadResponse = await youtube.captions.download({
+          id: captionId,
+          tfmt: 'srt' // SubRip format
+        });
+        
+        const srtContent = captionDownloadResponse.data;
+        console.log(`📄 Downloaded SRT content (${srtContent.length} characters)`);
+        
+        // Step 3: Parse SRT to extract timing and text
+        const transcript = parseSRTContentForWhisper(srtContent);
+        console.log(`🔄 Parsed ${transcript.length} subtitle segments`);
+        
+        if (transcript.length > 0) {
+          // Step 4: Process into sentences
+          const processedSentences = processYouTubeSubtitles(transcript);
           
           return res.json({
             success: true,
-            source: 'youtube-scraper',
+            source: 'youtube-api',
             sentences: processedSentences,
-            raw: subtitles
+            captionType: selectedTrack.snippet.trackKind,
+            language: selectedTrack.snippet.language,
+            raw: transcript
           });
         }
-      } catch (scraperError) {
-        console.error('Scraper fallback failed:', scraperError.message);
       }
-      
-      return res.status(404).json({
-        success: false,
-        error: 'No subtitles found for this video',
-        availableTracks: captionTracks.map(track => ({
-          language: track.snippet.language,
-          name: track.snippet.name,
-          kind: track.snippet.trackKind
-        }))
-      });
+    } catch (apiError) {
+      console.error('YouTube Data API failed:', apiError.message);
+      console.log('🔄 Falling back to scraper method...');
     }
     
-    console.log(`✅ Using ${selectedTrack.snippet.trackKind} English captions via API`);
-    
-    // Step 2: Download caption content
-    const captionId = selectedTrack.id;
-    const captionDownloadResponse = await youtube.captions.download({
-      id: captionId,
-      tfmt: 'srt' // SubRip format
-    });
-    
-    const srtContent = captionDownloadResponse.data;
-    console.log(`📄 Downloaded SRT content (${srtContent.length} characters)`);
-    
-    // Step 3: Parse SRT to extract timing and text
-    const transcript = parseSRTContentForWhisper(srtContent);
-    console.log(`🔄 Parsed ${transcript.length} subtitle segments`);
-    
-    if (transcript.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'Empty subtitle content'
+    // Fallback 2: Old scraper method
+    try {
+      const { getSubtitles } = require('youtube-captions-scraper');
+      const subtitles = await getSubtitles({
+        videoID: videoId,
+        lang: 'en'
       });
+
+      if (subtitles && subtitles.length > 0) {
+        console.log('✅ Fallback scraper found subtitles:', subtitles.length, 'entries');
+        const processedSentences = processYouTubeSubtitles(subtitles);
+        
+        return res.json({
+          success: true,
+          source: 'youtube-scraper',
+          sentences: processedSentences,
+          raw: subtitles
+        });
+      }
+    } catch (scraperError) {
+      console.error('Scraper fallback also failed:', scraperError.message);
     }
     
-    // Step 4: Process into sentences
-    const processedSentences = processYouTubeSubtitles(transcript);
-    
-    res.json({
-      success: true,
-      source: 'youtube-api',
-      sentences: processedSentences,
-      captionType: selectedTrack.snippet.trackKind,
-      language: selectedTrack.snippet.language,
-      raw: transcript
+    // All methods failed
+    return res.status(404).json({
+      success: false,
+      error: 'No subtitles found for this video',
+      details: 'All caption extraction methods failed (yt-dlp, YouTube API, scraper)',
+      suggestion: 'Please try a different video with English subtitles or closed captions (CC)'
     });
 
   } catch (error) {
