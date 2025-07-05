@@ -746,15 +746,19 @@ router.get('/transcript-practice/:videoId', async (req, res) => {
     } catch (nodeError) {
       console.error('Node.js captions scraper failed:', nodeError.message);
       return res.status(404).json({ 
-        error: 'No English captions found for this video.',
-        details: 'Auto-generated captions may not be available'
+        error: 'No English subtitles available',
+        details: 'This video does not have English subtitles or auto-generated captions. Please try a different video with English subtitles.',
+        videoId: videoId,
+        suggestion: 'Look for videos with the "CC" (closed captions) icon or try searching for videos from English-speaking channels.'
       });
     }
     
     if (!transcript.length) {
       return res.status(404).json({ 
-        error: 'No English captions found for this video.',
-        details: 'This video may not have English subtitles'
+        error: 'No English subtitles available',
+        details: 'This video does not have English subtitles or auto-generated captions. Please try a different video with English subtitles.',
+        videoId: videoId,
+        suggestion: 'Look for videos with the "CC" (closed captions) icon or try searching for videos from English-speaking channels.'
       });
     }
     
@@ -768,14 +772,16 @@ router.get('/transcript-practice/:videoId', async (req, res) => {
     res.json({
       sentences,
       totalDuration: sentences.length > 0 ? sentences[sentences.length - 1].end : 0,
-      processed: true
+      processed: true,
+      source: 'youtube'
     });
     
   } catch (error) {
     console.error('❌ Practice transcript error:', error);
     res.status(500).json({ 
       error: 'Failed to get practice transcript', 
-      details: error.message || 'Unknown error occurred'
+      details: error.message || 'Unknown error occurred',
+      videoId: req.params.videoId
     });
   }
 });
@@ -916,23 +922,43 @@ router.get('/audio/:videoId', async (req, res) => {
     
     // Step 3: Download new audio file
     if (!ytdl.validateURL(videoUrl)) {
-      return res.status(400).json({ error: 'Invalid YouTube URL' });
+      return res.status(400).json({ 
+        error: 'Invalid YouTube URL',
+        details: 'The provided video ID is not valid for YouTube.',
+        videoId: videoId
+      });
     }
     
     // Get video info with faster timeout
     console.log('⏰ Getting video info...');
-    const info = await ytdl.getInfo(videoUrl, {
-      requestOptions: {
-        timeout: 10000 // Reduced to 10 seconds
-      }
-    });
+    let info;
+    try {
+      info = await ytdl.getInfo(videoUrl, {
+        requestOptions: {
+          timeout: 10000 // Reduced to 10 seconds
+        }
+      });
+    } catch (infoError) {
+      console.error('Failed to get video info:', infoError.message);
+      return res.status(404).json({ 
+        error: 'Video not accessible',
+        details: 'This video may be private, age-restricted, or not available in your region. Please try a different video.',
+        videoId: videoId,
+        suggestion: 'Try searching for publicly available videos without age restrictions.'
+      });
+    }
     
     console.log(`Video info retrieved: ${info.videoDetails.title}`);
     
     const audioFormats = ytdl.filterFormats(info.formats, 'audioonly');
     
     if (audioFormats.length === 0) {
-      return res.status(404).json({ error: 'No audio format found' });
+      return res.status(404).json({ 
+        error: 'No audio format available',
+        details: 'This video does not have extractable audio formats. The video may be protected or have restricted access.',
+        videoId: videoId,
+        suggestion: 'Try a different video that allows audio extraction.'
+      });
     }
     
     // Choose a good balance between quality and speed

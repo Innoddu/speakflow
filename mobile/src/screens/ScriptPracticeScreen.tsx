@@ -57,6 +57,7 @@ export default function ScriptPracticeScreen() {
   const scrollViewRef = useRef<ScrollView>(null);
   const sentenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const videoHeightAnim = useRef(new Animated.Value(1)).current; // Video height animation
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
 
   useEffect(() => {
     // Test connection first
@@ -166,7 +167,41 @@ export default function ScriptPracticeScreen() {
       }
     } catch (error) {
       console.error('❌ Failed to load transcript:', error);
-      Alert.alert('Error', 'Failed to load transcript: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      
+      // Handle specific error cases
+      let userMessage = 'Failed to load transcript. Please try again.';
+      
+      if (error instanceof Error) {
+        const errorMessage = error.message.toLowerCase();
+        
+        if (errorMessage.includes('no english subtitles') || 
+            errorMessage.includes('no subtitles available') ||
+            errorMessage.includes('no english captions')) {
+          userMessage = '❌ This video doesn\'t have English subtitles.\n\n' +
+                       '💡 Please try a different video with English subtitles or closed captions (CC).';
+        } else if (errorMessage.includes('video not accessible') ||
+                   errorMessage.includes('private') ||
+                   errorMessage.includes('age-restricted')) {
+          userMessage = '🚫 This video is not accessible.\n\n' +
+                       '💡 Please try a publicly available video without age restrictions.';
+        } else if (errorMessage.includes('network') || 
+                   errorMessage.includes('connection')) {
+          userMessage = '🌐 Network connection failed.\n\n' +
+                       '💡 Please check your internet connection and try again.';
+        } else if (errorMessage.includes('both youtube subtitles and whisper')) {
+          userMessage = '❌ This video doesn\'t have English subtitles and audio extraction failed.\n\n' +
+                       '💡 Please try a different video with English subtitles.';
+        }
+      }
+      
+      setTranscriptError(userMessage);
+      
+      // Show alert only on native platforms
+      if (Platform.OS !== 'web') {
+        Alert.alert('Transcript Error', userMessage);
+      } else {
+        console.error('🚨 Web transcript error:', userMessage);
+      }
     } finally {
       setLoading(false);
     }
