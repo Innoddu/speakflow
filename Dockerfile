@@ -1,12 +1,13 @@
 # Use Node.js 20 as base image
 FROM node:20-slim
 
-# Install Python and other dependencies
+# Install Python, yt-dlp and other dependencies
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && pip3 install yt-dlp
 
 # Create app directory
 WORKDIR /app

@@ -1,5 +1,6 @@
 [build]
-  # Let Railway use the default npm install in root
+  # Use Dockerfile for build
+  builder = "dockerfile"
   
 [deploy]
   # Start command for the backend
