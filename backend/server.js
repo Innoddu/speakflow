@@ -54,4 +54,9 @@ app.listen(PORT, HOST, () => {
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`YouTube API Key: ${process.env.YOUTUBE_API_KEY ? 'Configured' : 'Missing'}`);
   console.log(`OpenAI API Key: ${process.env.OPENAI_API_KEY ? 'Configured' : 'Missing'}`);
+  console.log(`Health check endpoint: http://${HOST}:${PORT}/api/health`);
+  console.log(`Server started successfully at ${new Date().toISOString()}`);
+}).on('error', (err) => {
+  console.error('❌ Server failed to start:', err);
+  process.exit(1);
 });

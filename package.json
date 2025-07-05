@@ -6,7 +6,7 @@
   "scripts": {
     "start": "cd backend && npm start",
     "dev": "cd backend && npm run dev",
-    "install": "cd backend && npm install",
+    "postinstall": "cd backend && npm install",
     "build": "cd backend && npm install"
   },
   "keywords": ["english", "speaking", "practice", "youtube", "education"],
