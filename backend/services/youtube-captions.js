@@ -299,10 +299,115 @@ async function getCaptions(videoId, language = 'en') {
   }
 }
 
+// Extract audio using yt-dlp
+async function extractAudioWithYtDlp(videoId, outputDir = null) {
+  console.log(`🎵 Extracting audio for video ${videoId} using yt-dlp...`);
+  
+  // Use provided output directory or create temporary one
+  const tempDir = outputDir || path.join(os.tmpdir(), `yt-dlp-audio-${Date.now()}`);
+  if (!outputDir) {
+    fs.mkdirSync(tempDir, { recursive: true });
+  }
+  
+  try {
+    // Check if yt-dlp is available
+    await execAsync('yt-dlp --version');
+    
+    // Extract audio using yt-dlp
+    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const outputTemplate = path.join(tempDir, `${videoId}.%(ext)s`);
+    
+    const command = [
+      'yt-dlp',
+      '--extract-audio',
+      '--audio-format mp3',
+      '--audio-quality 192K',
+      '--no-playlist',
+      `--output "${outputTemplate}"`,
+      `"${videoUrl}"`
+    ].join(' ');
+    
+    console.log(`📥 Running audio extraction command: ${command}`);
+    
+    const { stdout, stderr } = await execAsync(command, {
+      cwd: tempDir,
+      timeout: 120000 // 2 minute timeout for audio extraction
+    });
+    
+    console.log(`✅ yt-dlp audio extraction completed successfully`);
+    if (stderr) {
+      console.log(`⚠️  yt-dlp stderr: ${stderr}`);
+    }
+    
+    // Find downloaded audio file
+    const files = fs.readdirSync(tempDir);
+    const audioFiles = files.filter(file => 
+      file.startsWith(videoId) && (file.endsWith('.mp3') || file.endsWith('.m4a') || file.endsWith('.webm'))
+    );
+    
+    if (audioFiles.length === 0) {
+      throw new Error('No audio file found. The video may not have extractable audio.');
+    }
+    
+    // Return the first audio file
+    const audioFile = audioFiles[0];
+    const audioPath = path.join(tempDir, audioFile);
+    const stats = fs.statSync(audioPath);
+    
+    console.log(`🎵 Successfully extracted audio: ${audioFile} (${(stats.size / 1024 / 1024).toFixed(2)}MB)`);
+    
+    return {
+      success: true,
+      audioPath: audioPath,
+      filename: audioFile,
+      fileSize: stats.size,
+      tempDir: outputDir ? null : tempDir // Only return tempDir if we created it
+    };
+    
+  } catch (error) {
+    console.error(`❌ Error extracting audio: ${error.message}`);
+    
+    if (error.message.includes('command not found')) {
+      throw new Error('yt-dlp is not installed. Please install it using: brew install yt-dlp');
+    }
+    
+    if (error.message.includes('timeout')) {
+      throw new Error('Audio extraction timed out. The video may be too long or have network issues.');
+    }
+    
+    throw new Error(`Failed to extract audio: ${error.message}`);
+    
+  } finally {
+    // Clean up temporary directory only if we created it
+    if (!outputDir) {
+      try {
+        // Don't clean up immediately - let the caller handle cleanup after using the file
+        console.log(`📁 Audio extracted to temporary directory: ${tempDir}`);
+      } catch (cleanupError) {
+        console.warn(`⚠️  Note about temp directory: ${cleanupError.message}`);
+      }
+    }
+  }
+}
+
+// Cleanup temporary directory
+function cleanupTempDir(tempDir) {
+  try {
+    if (tempDir && fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      console.log(`🧹 Cleaned up temporary directory: ${tempDir}`);
+    }
+  } catch (error) {
+    console.warn(`⚠️  Failed to clean up temp directory: ${error.message}`);
+  }
+}
+
 module.exports = {
   getCaptions,
   extractCaptionsWithYtDlp,
   extractCaptionsWithYoutubeDlExec,
   parseSRTContent,
-  formatCaptionsForFrontend
+  formatCaptionsForFrontend,
+  extractAudioWithYtDlp,
+  cleanupTempDir
 }; 

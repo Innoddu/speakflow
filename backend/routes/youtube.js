@@ -914,11 +914,10 @@ function parseSRTContent(srtContent) {
   return transcript;
 }
 
-// Download and serve audio file for a video with S3 integration
+// Download and serve audio file for a video with S3 integration (yt-dlp version)
 router.get('/audio/:videoId', async (req, res) => {
   try {
     const { videoId } = req.params;
-    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
     const audioFileName = `${videoId}.mp3`;
     const audioFilePath = path.join(audioDir, audioFileName);
     
@@ -956,9 +955,6 @@ router.get('/audio/:videoId', async (req, res) => {
         // Get S3 URL and return it
         const s3Url = await s3Service.getAudioFileUrl(videoId, 3600);
         
-        // Optionally clean up local file to save space
-        // s3Service.cleanupLocalFile(audioFilePath);
-        
         return res.json({
           audioUrl: s3Url,
           duration: 'unknown',
@@ -992,22 +988,36 @@ router.get('/audio/:videoId', async (req, res) => {
       }
     }
 
-    // Step 2.5: Check if old WebM file exists and convert it
-    const oldWebMPath = path.join(audioDir, `${videoId}.webm`);
-    if (fs.existsSync(oldWebMPath)) {
-      console.log(`Found old WebM file, converting to MP3: ${oldWebMPath}`);
+    // Step 3: Extract audio using yt-dlp
+    console.log('🚀 Trying yt-dlp for audio extraction...');
+    
+    try {
+      const audioResult = await youtubeCaptions.extractAudioWithYtDlp(videoId, audioDir);
       
-      try {
-        // Convert existing WebM to MP3
-        await convertWebMToMP3(oldWebMPath, audioFilePath);
-        console.log(`Converted old WebM to MP3: ${audioFilePath}`);
+      if (audioResult.success) {
+        console.log(`✅ yt-dlp audio extraction success: ${audioResult.filename}`);
         
-        const stats = fs.statSync(audioFilePath);
+        // Move the file to the correct location if needed
+        const extractedPath = audioResult.audioPath;
+        let finalAudioPath = audioFilePath;
+        
+        if (extractedPath !== audioFilePath) {
+          // Copy/move the file to the expected location
+          fs.copyFileSync(extractedPath, audioFilePath);
+          console.log(`📁 Moved audio file to: ${audioFilePath}`);
+          
+          // Clean up temp directory if provided
+          if (audioResult.tempDir) {
+            youtubeCaptions.cleanupTempDir(audioResult.tempDir);
+          }
+        }
+        
+        const stats = fs.statSync(finalAudioPath);
         
         try {
-          // Upload converted MP3 to S3
-          await s3Service.uploadAudioFile(videoId, audioFilePath);
-          console.log(`Converted MP3 uploaded to S3: ${audioFileName}`);
+          // Upload MP3 to S3 after successful extraction
+          await s3Service.uploadAudioFile(videoId, finalAudioPath);
+          console.log(`MP3 file uploaded to S3: ${audioFileName}`);
           
           // Get S3 URL
           const s3Url = await s3Service.getAudioFileUrl(videoId, 3600);
@@ -1015,212 +1025,53 @@ router.get('/audio/:videoId', async (req, res) => {
           return res.json({
             audioUrl: s3Url,
             duration: 'unknown',
-            title: 'Converted from WebM',
+            title: 'Extracted with yt-dlp',
             format: {
               bitrate: '192k',
               codec: 'mp3',
               container: 'mp3'
             },
             fileSize: stats.size,
-            cached: true,
+            cached: false,
             source: 's3'
           });
         } catch (s3Error) {
-          console.error('Failed to upload converted MP3 to S3:', s3Error);
-          // Fallback to local serving
+          console.error('S3 upload failed, serving local file:', s3Error);
+          // Fallback to local serving if S3 upload fails
           return res.json({
             audioUrl: `/audio/${audioFileName}`,
             duration: 'unknown',
-            title: 'Converted from WebM (Local)',
+            title: 'Extracted with yt-dlp (Local)',
             format: {
               bitrate: '192k',
               codec: 'mp3',
               container: 'mp3'
             },
             fileSize: stats.size,
-            cached: true,
+            cached: false,
             source: 'local'
           });
         }
-      } catch (conversionError) {
-        console.error('Failed to convert old WebM file:', conversionError);
-        // Continue to download new file
       }
-    }
-    
-    // Step 3: Download new audio file
-    if (!ytdl.validateURL(videoUrl)) {
-      return res.status(400).json({ 
-        error: 'Invalid YouTube URL',
-        details: 'The provided video ID is not valid for YouTube.',
-        videoId: videoId
-      });
-    }
-    
-    // Get video info with faster timeout
-    console.log('⏰ Getting video info...');
-    let info;
-    try {
-      info = await ytdl.getInfo(videoUrl, {
-        requestOptions: {
-          timeout: 10000 // Reduced to 10 seconds
-        }
-      });
-    } catch (infoError) {
-      console.error('Failed to get video info:', infoError.message);
+    } catch (ytDlpError) {
+      console.error('yt-dlp failed:', ytDlpError.message);
+      
+      // Return detailed error for yt-dlp failure
       return res.status(404).json({ 
-        error: 'Video not accessible',
-        details: 'This video may be private, age-restricted, or not available in your region. Please try a different video.',
+        error: 'Audio extraction failed',
+        details: ytDlpError.message,
         videoId: videoId,
-        suggestion: 'Try searching for publicly available videos without age restrictions.'
+        suggestion: 'This video may not support audio extraction, may be private, or may have regional restrictions.',
+        method: 'yt-dlp'
       });
     }
     
-    console.log(`Video info retrieved: ${info.videoDetails.title}`);
-    
-    const audioFormats = ytdl.filterFormats(info.formats, 'audioonly');
-    
-    if (audioFormats.length === 0) {
-      return res.status(404).json({ 
-        error: 'No audio format available',
-        details: 'This video does not have extractable audio formats. The video may be protected or have restricted access.',
-        videoId: videoId,
-        suggestion: 'Try a different video that allows audio extraction.'
-      });
-    }
-    
-    // Choose a good balance between quality and speed
-    const bestAudio = audioFormats.find(format => 
-      format.container === 'mp4' && parseInt(format.audioBitrate) >= 128
-    ) || audioFormats.find(format => 
-      parseInt(format.audioBitrate) >= 128
-    ) || audioFormats[0];
-    
-    console.log(`Downloading audio: ${bestAudio.audioCodec} at ${bestAudio.audioBitrate}kbps`);
-    
-    // Create temporary WebM file path for download
-    const tempWebMPath = path.join(audioDir, `${videoId}_temp.webm`);
-    
-    // Download audio file with optimized settings
-    console.log('📥 Starting audio download...');
-    const audioStream = ytdl(videoUrl, {
-      filter: 'audioonly',
-      quality: 'highestaudio',
-      requestOptions: {
-        timeout: 45000, // Increased timeout for download
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-      }
+    // If we get here, something unexpected happened
+    return res.status(500).json({
+      error: 'Unexpected error during audio extraction',
+      details: 'Audio extraction completed but no result was returned',
+      videoId: videoId
     });
-    
-    const writeStream = fs.createWriteStream(tempWebMPath);
-    
-    const downloadPromise = new Promise((resolve, reject) => {
-      let downloadStartTime = Date.now();
-      let downloadedBytes = 0;
-      
-      audioStream.pipe(writeStream);
-      
-      // Progress tracking
-      audioStream.on('progress', (chunkLength) => {
-        downloadedBytes += chunkLength;
-        const elapsed = (Date.now() - downloadStartTime) / 1000;
-        const speed = (downloadedBytes / 1024 / 1024 / elapsed).toFixed(2);
-        console.log(`📊 Download progress: ${(downloadedBytes / 1024 / 1024).toFixed(2)}MB at ${speed}MB/s`);
-      });
-      
-      audioStream.on('error', (error) => {
-        console.error('❌ Audio stream error:', error);
-        if (fs.existsSync(tempWebMPath)) {
-          fs.unlinkSync(tempWebMPath);
-        }
-        reject(error);
-      });
-      
-      writeStream.on('error', (error) => {
-        console.error('❌ Write stream error:', error);
-        if (fs.existsSync(tempWebMPath)) {
-          fs.unlinkSync(tempWebMPath);
-        }
-        reject(error);
-      });
-      
-      writeStream.on('finish', async () => {
-        console.log(`WebM file downloaded successfully: ${tempWebMPath}`);
-        
-        try {
-          // Convert WebM to MP3
-          await convertWebMToMP3(tempWebMPath, audioFilePath);
-          console.log(`Audio conversion completed: ${audioFilePath}`);
-          
-          const stats = fs.statSync(audioFilePath);
-          
-          try {
-            // Upload MP3 to S3 after successful conversion
-            await s3Service.uploadAudioFile(videoId, audioFilePath);
-            console.log(`MP3 file uploaded to S3: ${audioFileName}`);
-            
-            // Get S3 URL
-            const s3Url = await s3Service.getAudioFileUrl(videoId, 3600);
-            
-            // Clean up local file to save space (optional)
-            // s3Service.cleanupLocalFile(audioFilePath);
-            
-            resolve({
-              audioUrl: s3Url,
-              duration: info.videoDetails.lengthSeconds,
-              title: info.videoDetails.title,
-              format: {
-                bitrate: '192k',
-                codec: 'mp3',
-                container: 'mp3'
-              },
-              fileSize: stats.size,
-              cached: false,
-              source: 's3'
-            });
-          } catch (s3Error) {
-            console.error('S3 upload failed, serving local file:', s3Error);
-            // Fallback to local serving if S3 upload fails
-            resolve({
-              audioUrl: `/audio/${audioFileName}`,
-              duration: info.videoDetails.lengthSeconds,
-              title: info.videoDetails.title,
-              format: {
-                bitrate: '192k',
-                codec: 'mp3',
-                container: 'mp3'
-              },
-              fileSize: stats.size,
-              cached: false,
-              source: 'local'
-            });
-          }
-        } catch (conversionError) {
-          console.error('Audio conversion failed:', conversionError);
-          // Clean up temp file
-          if (fs.existsSync(tempWebMPath)) {
-            fs.unlinkSync(tempWebMPath);
-          }
-          reject(conversionError);
-        }
-      });
-    });
-    
-    // Handle the promise and send response
-    try {
-      const result = await downloadPromise;
-      res.json(result);
-    } catch (downloadError) {
-      console.error('❌ Download process failed:', downloadError);
-      return res.status(500).json({
-        error: 'Audio download failed',
-        details: downloadError.message,
-        videoId: videoId,
-        suggestion: 'This video may not support audio extraction or may be region-restricted.'
-      });
-    }
     
   } catch (error) {
     console.error('Audio download error:', error);
