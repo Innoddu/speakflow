@@ -4,7 +4,7 @@ nixPkgs = ["nodejs_20", "python3", "python3Packages.pip", "python3Packages.yt-dl
 [phases.build]
 cmds = [
   "npm install",
-  "pip3 install --user yt-dlp"
+  "pip3 install --break-system-packages yt-dlp"
 ]
 
 [phases.start]
