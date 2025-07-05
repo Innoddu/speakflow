@@ -1,4 +1,6 @@
 import { API_CONFIG } from '../config/api';
+import { Platform } from 'react-native';
+import * as FileSystem from 'expo-file-system';
 
 // Debug: Print API configuration on load
 console.log('🔧 Whisper Service - API_CONFIG.BASE_URL:', API_CONFIG.BASE_URL);
@@ -17,7 +19,6 @@ export const testConnection = async (): Promise<boolean> => {
     return false;
   }
 };
-import * as FileSystem from 'expo-file-system';
 
 export interface WhisperWord {
   word: string;
@@ -178,23 +179,30 @@ export const extractAudio = async (videoId: string): Promise<string> => {
 
     console.log('📁 Audio URL obtained, downloading...');
     
-    // Download audio file to device
-    const audioFileName = `audio_${videoId}_${Date.now()}.m4a`;
-    const audioUri = `${FileSystem.cacheDirectory}${audioFileName}`;
-    
-    const downloadResult = await FileSystem.downloadAsync(data.audioUrl, audioUri);
-    
-    if (downloadResult.status !== 200) {
-      throw new Error('Failed to download audio file');
-    }
+    // Platform-specific audio handling
+    if (Platform.OS === 'web') {
+      // For web, return the URL directly since we can't download files
+      console.log('🌐 Web platform: Using direct audio URL');
+      return data.audioUrl;
+    } else {
+      // For native platforms, download the file
+      const audioFileName = `audio_${videoId}_${Date.now()}.m4a`;
+      const audioUri = `${FileSystem.cacheDirectory}${audioFileName}`;
+      
+      const downloadResult = await FileSystem.downloadAsync(data.audioUrl, audioUri);
+      
+      if (downloadResult.status !== 200) {
+        throw new Error('Failed to download audio file');
+      }
 
-    console.log('✅ Audio downloaded:', audioUri);
-    const fileInfo = await FileSystem.getInfoAsync(audioUri);
-    if (fileInfo.exists && 'size' in fileInfo) {
-      console.log('📊 File size:', fileInfo.size, 'bytes');
+      console.log('✅ Audio downloaded:', audioUri);
+      const fileInfo = await FileSystem.getInfoAsync(audioUri);
+      if (fileInfo.exists && 'size' in fileInfo) {
+        console.log('📊 File size:', fileInfo.size, 'bytes');
+      }
+      
+      return audioUri;
     }
-    
-    return audioUri;
 
   } catch (error) {
     console.error('❌ Audio extraction error:', error);
@@ -262,37 +270,39 @@ export const transcribeWithWhisper = async (videoId: string): Promise<Transcript
     // 2. Extract audio file for new transcription
     const audioUri = await extractAudio(videoId);
     
-    // Prepare form data for upload
+    // Platform-specific form data preparation
     const formData = new FormData();
     
-    // Read file as blob for upload
-    const audioInfo = await FileSystem.getInfoAsync(audioUri);
-    if (!audioInfo.exists) {
-      throw new Error('Audio file does not exist');
+    if (Platform.OS === 'web') {
+      // For web, we have the direct URL - let the backend handle the download
+      console.log('🌐 Web platform: Sending audio URL to backend');
+      formData.append('audioUrl', audioUri);
+      formData.append('videoId', videoId);
+    } else {
+      // For native platforms, upload the downloaded file
+      const audioInfo = await FileSystem.getInfoAsync(audioUri);
+      if (!audioInfo.exists) {
+        throw new Error('Audio file does not exist');
+      }
+
+      // Create file object for upload with proper format
+      const audioBlob = {
+        uri: audioUri,
+        type: 'audio/mp4',
+        name: `audio_${videoId}.mp4`
+      } as any;
+
+      formData.append('audio', audioBlob);
+      formData.append('videoId', videoId);
     }
 
-    // Create file object for upload with proper format
-    const audioBlob = {
-      uri: audioUri,
-      type: 'audio/mp4', // Change to mp4 which is supported
-      name: `audio_${videoId}.mp4`
-    } as any;
-
-    formData.append('audio', audioBlob);
-    formData.append('videoId', videoId); // Include videoId for caching
-
     console.log('📤 Uploading audio to Whisper API...');
-    console.log('📄 File details:', {
-      uri: audioUri,
-      type: 'audio/mp4',
-      name: `audio_${videoId}.mp4`
-    });
+    console.log('📄 Platform:', Platform.OS);
     
-    // Upload to Whisper API (remove Content-Type header to let browser set it)
+    // Upload to Whisper API
     const response = await fetch(`${API_CONFIG.BASE_URL}/whisper/transcribe`, {
       method: 'POST',
       body: formData,
-      // Remove Content-Type header - let the browser set it automatically for FormData
     });
 
     if (!response.ok) {
@@ -302,8 +312,10 @@ export const transcribeWithWhisper = async (videoId: string): Promise<Transcript
 
     const data = await response.json();
     
-    // Clean up downloaded audio file
-    await FileSystem.deleteAsync(audioUri, { idempotent: true });
+    // Clean up downloaded audio file (only for native platforms)
+    if (Platform.OS !== 'web') {
+      await FileSystem.deleteAsync(audioUri, { idempotent: true });
+    }
 
     console.log('✅ Whisper transcription completed');
     console.log('📊 Found sentences:', data.sentences?.length || 0);

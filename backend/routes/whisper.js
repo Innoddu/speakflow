@@ -149,13 +149,14 @@ router.get('/cached/:videoId', async (req, res) => {
 // Transcribe audio with Whisper AI (with S3 caching)
 router.post('/transcribe', upload.single('audio'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No audio file provided' });
+    const videoId = req.body.videoId;
+    const audioUrl = req.body.audioUrl;
+    
+    // Handle both file upload and URL download
+    if (!req.file && !audioUrl) {
+      return res.status(400).json({ error: 'No audio file or URL provided' });
     }
 
-    // Extract video ID from filename if available
-    const videoId = req.body.videoId || req.file.originalname.replace(/[^a-zA-Z0-9_-]/g, '');
-    
     // Check cache first (both local and S3)
     if (videoId) {
       const cacheFilePath = path.join(whisperCacheDir, `${videoId}.json`);
@@ -164,8 +165,10 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
       if (fs.existsSync(cacheFilePath)) {
         console.log('🎯 Whisper: Using local cached result for video:', videoId);
         
-        // Clean up uploaded file
-        fs.unlinkSync(req.file.path);
+        // Clean up uploaded file if exists
+        if (req.file) {
+          fs.unlinkSync(req.file.path);
+        }
         
         const cachedData = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'));
         return res.json({
@@ -182,8 +185,10 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
         if (s3CacheExists) {
           console.log('🎯 Whisper: Using S3 cached result for video:', videoId);
           
-          // Clean up uploaded file
-          fs.unlinkSync(req.file.path);
+          // Clean up uploaded file if exists
+          if (req.file) {
+            fs.unlinkSync(req.file.path);
+          }
           
           const cachedData = await s3Service.getWhisperCache(videoId);
           
@@ -207,20 +212,67 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
       }
     }
 
-    console.log('🎤 Whisper: Starting NEW transcription for:', req.file.originalname);
-    console.log('📁 File size:', (req.file.size / 1024 / 1024).toFixed(2), 'MB');
-    console.log('📄 File details:', {
-      originalname: req.file.originalname,
-      mimetype: req.file.mimetype,
-      size: req.file.size,
-      path: req.file.path
-    });
+    let audioFilePath;
+    let isDownloaded = false;
+    
+    if (req.file) {
+      // File uploaded directly
+      console.log('🎤 Whisper: Starting NEW transcription for:', req.file.originalname);
+      console.log('📁 File size:', (req.file.size / 1024 / 1024).toFixed(2), 'MB');
+      audioFilePath = req.file.path;
+    } else {
+      // Download from URL (for web platform)
+      console.log('🌐 Whisper: Downloading audio from URL for video:', videoId);
+      console.log('🔗 Audio URL:', audioUrl.substring(0, 100) + '...');
+      
+      // Create temporary file for download
+      const tempFileName = `temp_${videoId}_${Date.now()}.audio`;
+      audioFilePath = path.join(__dirname, '..', 'uploads', tempFileName);
+      
+      // Download audio file
+      const https = require('https');
+      const http = require('http');
+      const url = require('url');
+      
+      await new Promise((resolve, reject) => {
+        const parsedUrl = url.parse(audioUrl);
+        const client = parsedUrl.protocol === 'https:' ? https : http;
+        
+        const file = fs.createWriteStream(audioFilePath);
+        const request = client.get(audioUrl, (response) => {
+          if (response.statusCode !== 200) {
+            reject(new Error(`Failed to download audio: ${response.statusCode}`));
+            return;
+          }
+          
+          response.pipe(file);
+          
+          file.on('finish', () => {
+            file.close();
+            const stats = fs.statSync(audioFilePath);
+            console.log('📁 Downloaded file size:', (stats.size / 1024 / 1024).toFixed(2), 'MB');
+            isDownloaded = true;
+            resolve();
+          });
+        });
+        
+        request.on('error', (err) => {
+          fs.unlink(audioFilePath, () => {}); // Clean up on error
+          reject(err);
+        });
+        
+        file.on('error', (err) => {
+          fs.unlink(audioFilePath, () => {}); // Clean up on error
+          reject(err);
+        });
+      });
+    }
 
-    const audioFilePath = req.file.path;
     let finalAudioPath = audioFilePath;
 
     // Convert to MP3 if the file is not already in a compatible format
-    if (req.file.mimetype !== 'audio/mpeg' && req.file.mimetype !== 'audio/mp3') {
+    const fileExtension = path.extname(audioFilePath).toLowerCase();
+    if (fileExtension !== '.mp3' && fileExtension !== '.wav' && fileExtension !== '.m4a') {
       console.log('🔄 Converting audio to MP3 format...');
       const mp3Path = audioFilePath + '.mp3';
       
@@ -248,7 +300,7 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
     console.log('📊 Segments found:', transcription.segments?.length || 0);
     console.log('📝 Words found:', transcription.words?.length || 0);
 
-    // Clean up uploaded files
+    // Clean up files
     fs.unlinkSync(audioFilePath);
     if (finalAudioPath !== audioFilePath && fs.existsSync(finalAudioPath)) {
       fs.unlinkSync(finalAudioPath);
