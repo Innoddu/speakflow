@@ -27,24 +27,36 @@ function cleanupMemory() {
 
 // Test spaCy availability
 let spacyAvailable = false;
-(async () => {
+let spacyModelLoaded = false;
+
+// Lazy load spaCy model only when needed
+async function ensureSpacyModel() {
+  if (spacyModelLoaded) return true;
+  
   try {
-    // Test if spaCy is available by running a simple Python command
     const { exec } = require('child_process');
     const { promisify } = require('util');
     const execAsync = promisify(exec);
     
     await execAsync('python3 -c "import spacy; nlp = spacy.load(\'en_core_web_sm\'); print(\'spaCy test successful\')"');
     spacyAvailable = true;
+    spacyModelLoaded = true;
     console.log('✅ spaCy English model loaded successfully');
+    return true;
   } catch (error) {
     console.warn('⚠️ spaCy not available, falling back to natural tokenizer');
     console.warn('Error:', error.message);
+    return false;
   }
-})();
+}
 
 // Function to tokenize sentences using spaCy
 async function tokenizeWithSpacy(text) {
+  // Ensure spaCy model is loaded
+  const spacyReady = await ensureSpacyModel();
+  if (!spacyReady) {
+    throw new Error('spaCy model not available');
+  }
   return new Promise((resolve, reject) => {
     const python = spawn('python3', ['-c', `
 import spacy
