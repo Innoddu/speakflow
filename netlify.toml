@@ -1,7 +1,11 @@
 # Netlify configuration for SpeakFlow web app
 [build]
-  command = "cd mobile && NODE_ENV=production npx expo export --platform web && cd .. && cp -r mobile/dist/* ."
+  command = "cd mobile && npm install && NODE_ENV=production npx expo export --platform web && cd .. && cp -r mobile/dist/* ."
   publish = "."
+
+[build.environment]
+  NPM_FLAGS = "--version"
+  NODE_VERSION = "20"
 
 # SPA redirect for React Navigation
 [[redirects]]
