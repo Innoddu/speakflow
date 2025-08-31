@@ -412,24 +412,24 @@ export default function ScriptPracticeScreen() {
       // Pause: stop all playback
       console.log('⏸️ Global pause - stopping all playback');
       
-      // TTS 정지
+      // Stop TTS
       if (isTTSPlaying) {
         await TTSService.stop();
         setIsTTSPlaying(false);
       }
       
-      // Original 오디오 정지
+      // Stop original audio
       if (isAudioPlaying && audioPlayerRef.current) {
         audioPlayerRef.current.pause();
         setIsAudioPlaying(false);
       }
       
-      // Auto Play 정지
+      // Stop Auto Play
       if (isAutoPlay) {
         setIsAutoPlay(false);
       }
       
-      // 타이머 정리
+      // Clear timers
       if (sentenceTimerRef.current) {
         clearTimeout(sentenceTimerRef.current);
         sentenceTimerRef.current = null;
@@ -453,7 +453,7 @@ export default function ScriptPracticeScreen() {
         console.log('🎵 Starting Original playback');
         playSentenceOnly(currentSentence);
       } else {
-        // 모드가 설정되지 않은 경우 Original 모드로 설정
+        // Set to Original mode if no mode is selected
         setPlaybackMode('original');
         playSentenceOnly(currentSentence);
       }
@@ -482,7 +482,7 @@ export default function ScriptPracticeScreen() {
           setCurrentSentenceIndex(nextIndex);
           setTimeout(() => {
             playVideoSentence(sentences[nextIndex]);
-          }, 1000); // 1초 간격
+          }, 1000); // 1 second interval
         }
       }, sentence.duration * 1000);
       
@@ -556,7 +556,7 @@ export default function ScriptPracticeScreen() {
   };
 
   const handleSentencePress = async (index: number) => {
-    // 현재 재생 중인 경우 중지
+    // Stop if currently playing
     if (isPlaying || isTTSPlaying) {
       if (audioPlayerRef.current) {
         audioPlayerRef.current.pause();
@@ -579,7 +579,7 @@ export default function ScriptPracticeScreen() {
       return;
     }
     
-    // 타이머 정리
+    // Clear timers
     if (sentenceTimerRef.current) {
       clearTimeout(sentenceTimerRef.current);
       sentenceTimerRef.current = null;
@@ -587,7 +587,7 @@ export default function ScriptPracticeScreen() {
     
     const sentence = sentences[index];
     
-    // 선택된 모드에 따라 재생
+    // Play according to selected mode
     if (playbackMode === 'tts') {
       console.log('🗣️ Playing with TTS mode');
       TTSService.stop();
