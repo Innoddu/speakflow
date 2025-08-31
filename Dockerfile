@@ -5,11 +5,19 @@ FROM node:20-slim
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
-    python3-full \
+    python3-dev \
+    python3-venv \
+    build-essential \
     ffmpeg \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip3 install --break-system-packages yt-dlp spacy \
-    && python3 -m spacy download en_core_web_sm
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages separately for better error handling
+RUN pip3 install --no-cache-dir --break-system-packages yt-dlp
+
+# Install spaCy and download model
+RUN pip3 install --no-cache-dir --break-system-packages spacy && \
+    python3 -m spacy download en_core_web_sm
 
 # Create app directory
 WORKDIR /app
