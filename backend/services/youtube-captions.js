@@ -21,8 +21,8 @@ async function extractCaptionsWithYtDlp(videoId, language = 'en') {
   try {
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
     
-    // Try to extract captions using yt-dlp with anti-bot options
-    const command = `yt-dlp --write-auto-sub --write-sub --sub-lang ${language} --sub-format srt --skip-download --no-check-certificate --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" --extractor-args "youtube:player_client=web" --output "%(title)s.%(ext)s" "${videoUrl}"`;
+    // Try to extract captions using yt-dlp with enhanced anti-bot options
+    const command = `yt-dlp --write-auto-sub --write-sub --sub-lang ${language} --sub-format srt --skip-download --no-check-certificate --user-agent "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15" --extractor-args "youtube:player_client=ios,web" --cookies-from-browser chrome --output "%(title)s.%(ext)s" "${videoUrl}"`;
     
     console.log(`🔧 Running enhanced command: ${command}`);
     const { stdout, stderr } = await execAsync(command, { cwd: tempDir, timeout: 30000 });
@@ -276,6 +276,9 @@ async function extractAudioWithYtDlp(videoId, outputDir = null) {
       '--audio-format mp3',
       '--audio-quality 192K',
       '--no-playlist',
+      '--user-agent "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15"',
+      '--extractor-args "youtube:player_client=ios,web"',
+      '--cookies-from-browser chrome',
       `--output "${outputTemplate}"`,
       `"${videoUrl}"`
     ].join(' ');
