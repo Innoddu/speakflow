@@ -1,21 +1,21 @@
-# example netlify.toml
+# Netlify configuration for SpeakFlow web app
 [build]
-  command = "expo"
-  functions = "netlify/functions"
-  publish = "dist"
+  command = "cd mobile && NODE_ENV=production npx expo export --platform web && cd .. && cp -r mobile/dist/* ."
+  publish = "."
 
-  ## Uncomment to use this redirect for Single Page Applications like create-react-app.
-  ## Not needed for static site generators.
-  #[[redirects]]
-  #  from = "/*"
-  #  to = "/index.html"
-  #  status = 200
+# SPA redirect for React Navigation
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
 
-  ## (optional) Settings for Netlify Dev
-  ## https://github.com/netlify/cli/blob/main/docs/netlify-dev.md#project-detection
-  #[dev]
-  #  command = "yarn start" # Command to start your dev server
-  #  port = 3000 # Port that the dev server will be listening on
-  #  publish = "dist" # Folder with the static content for _redirect file
+# Headers for better performance
+[[headers]]
+  for = "/_expo/static/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
 
-  ## more info on configuring this file: https://ntl.fyi/file-based-build-config
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

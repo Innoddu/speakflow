@@ -16,7 +16,7 @@ const getBaseUrl = () => {
     }
   } else {
     // Production environment
-    return 'https://speakflow-production.up.railway.app/api';
+    return 'https://speakflow-ua78.onrender.com/api';
   }
 };
 
