@@ -8,7 +8,8 @@ RUN apt-get update && apt-get install -y \
     python3-full \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
-    && pip3 install --break-system-packages yt-dlp
+    && pip3 install --break-system-packages yt-dlp spacy \
+    && python3 -m spacy download en_core_web_sm
 
 # Create app directory
 WORKDIR /app
