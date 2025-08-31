@@ -1,6 +1,7 @@
 const express = require('express');
-const router = express.Router();
 const OpenAI = require('openai');
+
+const router = express.Router();
 
 // Initialize OpenAI client
 const openai = new OpenAI({

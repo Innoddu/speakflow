@@ -132,6 +132,34 @@ export const removeFromHistory = async (videoId: string): Promise<void> => {
   }
 };
 
+// Delete video from history with complete cache cleanup (including S3)
+export const removeFromHistoryWithCache = async (videoId: string): Promise<{
+  success: boolean;
+  videoTitle: string;
+  cacheCleanup: any;
+}> => {
+  try {
+    console.log('🗑️ Completely removing from history with cache cleanup:', videoId);
+    
+    const response = await fetch(`${API_CONFIG.BASE_URL}/history/${videoId}?deleteCache=true`, {
+      method: 'DELETE',
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to remove from history');
+    }
+    
+    const data = await response.json();
+    console.log(`✅ Completely removed from history with cache:`, data);
+    
+    return data;
+    
+  } catch (error) {
+    console.error('❌ Error removing from history with cache:', error);
+    throw new Error('Failed to remove from history: ' + (error instanceof Error ? error.message : 'Unknown error'));
+  }
+};
+
 // Clear all history
 export const clearHistory = async (): Promise<void> => {
   try {
@@ -150,6 +178,32 @@ export const clearHistory = async (): Promise<void> => {
   } catch (error) {
     console.error('❌ Error clearing history:', error);
     throw new Error('Failed to clear history: ' + (error instanceof Error ? error.message : 'Unknown error'));
+  }
+};
+
+// Clear all history with cache cleanup for all videos
+export const clearHistoryWithCache = async (): Promise<void> => {
+  try {
+    console.log('🗑️ Clearing all history with cache cleanup...');
+    
+    // First get all videos in history
+    const historyData = await getHistory();
+    
+    // Delete each video individually with cache cleanup
+    const deletePromises = historyData.map(video => 
+      removeFromHistoryWithCache(video.videoId).catch(error => {
+        console.error(`Failed to delete ${video.videoId}:`, error);
+        return null;
+      })
+    );
+    
+    await Promise.all(deletePromises);
+    
+    console.log('✅ All history and cache cleared');
+    
+  } catch (error) {
+    console.error('❌ Error clearing history with cache:', error);
+    throw new Error('Failed to clear history with cache: ' + (error instanceof Error ? error.message : 'Unknown error'));
   }
 };
 

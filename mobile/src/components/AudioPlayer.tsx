@@ -11,7 +11,7 @@ export type AudioPlayerRef = {
   play: () => void;
   pause: () => void;
   getCurrentTime: (callback: (time: number) => void) => void;
-  playWithVAD: (onSilenceDetected: () => void) => void;
+  playWithVAD: (onSilenceDetected: () => void, endTime?: number) => void;
 };
 
 // Web Audio Player using HTML5 Audio with Voice Activity Detection
@@ -27,6 +27,26 @@ const WebAudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => 
   const analyserRef = useRef<AnalyserNode | null>(null);
   const vadIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const onSilenceDetectedRef = useRef<(() => void) | null>(null);
+
+  // Add new state for sentence playback
+  const [sentenceEndTime, setSentenceEndTime] = useState<number | null>(null);
+  const endCheckInterval = useRef<NodeJS.Timeout | null>(null);
+
+  // Add function to check and stop at sentence end
+  const checkAndStopAtSentenceEnd = () => {
+    if (audioRef.current && sentenceEndTime !== null) {
+      if (audioRef.current.currentTime >= sentenceEndTime) {
+        audioRef.current.pause();
+        setIsPlaying(false);
+        stopVoiceActivityDetection();
+        setSentenceEndTime(null);
+        if (endCheckInterval.current) {
+          clearInterval(endCheckInterval.current);
+          endCheckInterval.current = null;
+        }
+      }
+    }
+  };
 
   // Voice Activity Detection with advanced audio analysis
   const startVoiceActivityDetection = (onSilenceDetected: () => void) => {
@@ -152,6 +172,7 @@ const WebAudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => 
         audioRef.current.play()
           .then(() => {
             setIsPlaying(true);
+            setSentenceEndTime(null); // Reset sentence end time for full playback
             console.log('▶️ Web Audio: Started playing');
           })
           .catch((error) => {
@@ -164,6 +185,11 @@ const WebAudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => 
         audioRef.current.pause();
         setIsPlaying(false);
         stopVoiceActivityDetection();
+        setSentenceEndTime(null);
+        if (endCheckInterval.current) {
+          clearInterval(endCheckInterval.current);
+          endCheckInterval.current = null;
+        }
         console.log('⏸️ Web Audio: Paused');
       }
     },
@@ -171,14 +197,23 @@ const WebAudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => 
       const timeInSeconds = position / 1000;
       callback(timeInSeconds);
     },
-    // New method for smart sentence playback
-    playWithVAD: (onSilenceDetected: () => void) => {
+    playWithVAD: (onSilenceDetected: () => void, endTime?: number) => {
       if (audioRef.current) {
+        // Set sentence end time if provided
+        if (endTime) {
+          setSentenceEndTime(endTime);
+          // Start interval to check for sentence end
+          if (endCheckInterval.current) {
+            clearInterval(endCheckInterval.current);
+          }
+          endCheckInterval.current = setInterval(checkAndStopAtSentenceEnd, 100);
+        }
+
         audioRef.current.play()
           .then(() => {
             setIsPlaying(true);
             startVoiceActivityDetection(onSilenceDetected);
-            console.log('▶️ Web Audio: Started playing with VAD');
+            console.log('▶️ Web Audio: Started playing with VAD', endTime ? `(until ${endTime}s)` : '');
           })
           .catch((error) => {
             console.error('❌ Web Audio play with VAD error:', error);
@@ -186,6 +221,16 @@ const WebAudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) => 
       }
     },
   }));
+
+  // Clean up intervals on unmount
+  useEffect(() => {
+    return () => {
+      if (endCheckInterval.current) {
+        clearInterval(endCheckInterval.current);
+        endCheckInterval.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (Platform.OS === 'web') {
@@ -298,23 +343,23 @@ const NativeAudioPlayer = forwardRef<AudioPlayerRef, Props>(({ audioUrl }, ref) 
 
   useImperativeHandle(ref, () => ({
     seekTo: async (timeInSeconds: number) => {
-      if (sound) {
+        if (sound) {
         await sound.setPositionAsync(timeInSeconds * 1000);
         setPosition(timeInSeconds * 1000);
         console.log(`🎵 Native Audio: Seeked to ${timeInSeconds}s`);
       }
     },
     play: async () => {
-      if (sound) {
-        await sound.playAsync();
-        setIsPlaying(true);
+        if (sound) {
+          await sound.playAsync();
+          setIsPlaying(true);
         console.log('▶️ Native Audio: Started playing');
       }
     },
     pause: async () => {
-      if (sound) {
-        await sound.pauseAsync();
-        setIsPlaying(false);
+        if (sound) {
+          await sound.pauseAsync();
+          setIsPlaying(false);
         console.log('⏸️ Native Audio: Paused');
       }
     },

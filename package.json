@@ -9,14 +9,22 @@
     "postinstall": "cd backend && npm install",
     "build": "cd backend && npm install"
   },
-  "keywords": ["english", "speaking", "practice", "youtube", "education"],
+  "keywords": [
+    "english",
+    "speaking",
+    "practice",
+    "youtube",
+    "education"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@xenova/transformers": "^2.15.0",
     "react-native-webview": "^13.15.0",
     "youtube-captions-scraper": "^2.0.3"
   },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "packageManager": "yarn@4.1.0+sha512.5b7bc055cad63273dda27df1570a5d2eb4a9f03b35b394d3d55393c2a5560a17f5cef30944b11d6a48bcbcfc1c3a26d618aae77044774c529ba36cb771ad5b0f"
 }

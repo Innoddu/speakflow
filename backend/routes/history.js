@@ -1,7 +1,9 @@
 const express = require('express');
-const router = express.Router();
 const fs = require('fs');
 const path = require('path');
+const s3Service = require('../services/s3Service');
+
+const router = express.Router();
 
 // Create history directory if it doesn't exist
 const historyDir = path.join(__dirname, '..', 'data', 'history');
@@ -170,25 +172,88 @@ router.post('/update-audio/:videoId', async (req, res) => {
   }
 });
 
-// Delete video from history
+// Delete video from history (with optional cache cleanup)
 router.delete('/:videoId', async (req, res) => {
   try {
     const { videoId } = req.params;
+    const { deleteCache } = req.query; // Query parameter to control cache deletion
     
     const history = readHistory();
+    const videoToDelete = history.find(item => item.videoId === videoId);
     const filteredHistory = history.filter(item => item.videoId !== videoId);
     
     if (filteredHistory.length === history.length) {
       return res.status(404).json({ error: 'Video not found in history' });
     }
     
+    // Delete from history first
     writeHistory(filteredHistory);
+    console.log(`🗑️ History: Deleted video ${videoId} from history`);
     
-    console.log(`🗑️ History: Deleted video ${videoId}`);
+    let cacheResults = null;
+    
+    // Delete cache files if requested
+    if (deleteCache === 'true') {
+      console.log(`🧹 Starting cache cleanup for video ${videoId}...`);
+      
+      try {
+        // Delete local whisper cache
+        const whisperCacheDir = path.join(__dirname, '..', 'cache', 'whisper');
+        const localCachePath = path.join(whisperCacheDir, `${videoId}.json`);
+        let localCacheDeleted = false;
+        
+        if (fs.existsSync(localCachePath)) {
+          fs.unlinkSync(localCachePath);
+          localCacheDeleted = true;
+          console.log(`🗑️ Local whisper cache deleted: ${videoId}`);
+        }
+        
+        // Delete local audio file
+        const audioDir = path.join(__dirname, '..', 'uploads');
+        const localAudioPath = path.join(audioDir, `${videoId}.mp3`);
+        let localAudioDeleted = false;
+        
+        if (fs.existsSync(localAudioPath)) {
+          fs.unlinkSync(localAudioPath);
+          localAudioDeleted = true;
+          console.log(`🗑️ Local audio file deleted: ${videoId}`);
+        }
+        
+        // Delete S3 cache
+        const s3Results = await s3Service.deleteVideoCache(videoId);
+        
+        cacheResults = {
+          localCache: {
+            whisperDeleted: localCacheDeleted,
+            audioDeleted: localAudioDeleted
+          },
+          s3Cache: s3Results,
+          summary: {
+            totalFilesDeleted: (localCacheDeleted ? 1 : 0) + 
+                              (localAudioDeleted ? 1 : 0) + 
+                              (s3Results.audioDeleted ? 1 : 0) + 
+                              (s3Results.whisperDeleted ? 1 : 0)
+          }
+        };
+        
+        console.log(`✅ Cache cleanup completed for ${videoId}:`, cacheResults.summary);
+        
+      } catch (cacheError) {
+        console.error(`❌ Cache cleanup failed for ${videoId}:`, cacheError);
+        cacheResults = {
+          error: cacheError.message,
+          localCache: { whisperDeleted: false, audioDeleted: false },
+          s3Cache: { audioDeleted: false, whisperDeleted: false }
+        };
+      }
+    }
     
     res.json({
       success: true,
-      message: 'Video removed from history'
+      message: 'Video removed from history',
+      videoId,
+      videoTitle: videoToDelete?.title || 'Unknown',
+      cacheCleanup: deleteCache === 'true' ? cacheResults : 'not requested'
     });
     
   } catch (error) {

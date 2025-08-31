@@ -15,8 +15,8 @@ class TTSService {
     try {
       console.log('🎤 OpenAI TTS: Generating speech for:', text.substring(0, 50) + '...');
       
-      // Stop any currently playing TTS
-      await this.stop();
+      // Stop any currently playing TTS (don't await for faster response)
+      this.stop(); // Execute in parallel
 
       const response = await fetch(`${API_CONFIG.BASE_URL}/tts/speak`, {
         method: 'POST',
@@ -56,7 +56,7 @@ class TTSService {
         { encoding: FileSystem.EncodingType.Base64 }
       );
 
-      // Create and play audio
+      // Create and play audio immediately
       const { sound } = await Audio.Sound.createAsync(
         { uri: tempUri },
         { shouldPlay: true, volume: 1.0 }
@@ -64,7 +64,7 @@ class TTSService {
 
       this.sound = sound;
       this.isPlaying = true;
-      console.log('✅ OpenAI TTS: Playing generated speech');
+      console.log('✅ OpenAI TTS: Playing generated speech immediately');
 
       // Clean up when finished
       sound.setOnPlaybackStatusUpdate((status) => {

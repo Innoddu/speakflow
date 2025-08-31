@@ -10,9 +10,9 @@ const getBaseUrl = () => {
     if (Platform.OS === 'web') {
       return 'http://localhost:5030/api';
     } else {
-      // For iOS/Android simulators/devices, use your computer's IP
-      // You can also use 'http://localhost:5030/api' if using Expo tunneling
-      return 'http://192.168.25.36:5030/api';
+      // For iOS/Android simulators/devices, use localhost (works with Expo tunneling)
+      // If this doesn't work, use your computer's IP: http://172.29.34.222:5030/api
+      return 'http://localhost:5030/api';
     }
   } else {
     // Production environment

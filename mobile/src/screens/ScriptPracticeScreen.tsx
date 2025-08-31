@@ -11,7 +11,15 @@ import {
   Platform,
   Animated,
 } from 'react-native';
-import { PanGestureHandler, State, GestureHandlerRootView } from 'react-native-gesture-handler';
+import {
+  PanGestureHandler,
+  State,
+  GestureHandlerRootView,
+} from 'react-native-gesture-handler';
+import type {
+  PanGestureHandlerGestureEvent,
+  PanGestureHandlerStateChangeEvent,
+} from 'react-native-gesture-handler';
 import { useRoute } from '@react-navigation/native';
 import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../../App';
@@ -29,6 +37,78 @@ import { API_CONFIG } from '../config/api';
 type ScriptPracticeScreenRouteProp = RouteProp<RootStackParamList, 'ScriptPractice'>;
 
 const { width } = Dimensions.get('window');
+
+// Utility functions
+const formatTime = (seconds: number): string => {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+};
+
+interface SentenceItemProps {
+  sentence: PracticeSentence;
+  index: number;
+  isCurrentSentence: boolean;
+  showingTranslation: boolean;
+  swipeAnim: Animated.Value;
+  onPress: () => void;
+  onGestureEvent: (event: any) => void;
+  onGestureStateChange: (event: any) => void;
+}
+
+const SentenceItem: React.FC<SentenceItemProps> = React.memo(({ 
+  sentence, 
+  index, 
+  isCurrentSentence,
+  showingTranslation,
+  swipeAnim,
+  onPress,
+  onGestureEvent,
+  onGestureStateChange 
+}) => (
+  <PanGestureHandler
+    onGestureEvent={onGestureEvent}
+    onHandlerStateChange={onGestureStateChange}
+  >
+    <Animated.View
+      style={[
+        styles.sentenceContainer,
+        isCurrentSentence && styles.currentSentence,
+        showingTranslation && styles.translationMode,
+        {
+          transform: [{ translateX: swipeAnim }]
+        }
+      ]}
+    >
+      <TouchableOpacity
+        style={styles.sentenceContent}
+        onPress={onPress}
+      >
+        <View style={styles.sentenceHeader}>
+          <Text style={[
+            styles.sentenceNumber,
+            isCurrentSentence && styles.currentSentenceNumber
+          ]}>
+            Sentence {index + 1}
+          </Text>
+          <Text style={[
+            styles.sentenceTime,
+            isCurrentSentence && styles.currentSentenceTime
+          ]}>
+            {formatTime(sentence.start)} - {formatTime(sentence.end)}
+          </Text>
+        </View>
+        
+        <Text style={[
+          styles.sentenceText,
+          isCurrentSentence && styles.currentSentenceText
+        ]}>
+          {sentence.text}
+        </Text>
+      </TouchableOpacity>
+    </Animated.View>
+  </PanGestureHandler>
+));
 
 export default function ScriptPracticeScreen() {
   const route = useRoute<ScriptPracticeScreenRouteProp>();
@@ -59,6 +139,16 @@ export default function ScriptPracticeScreen() {
   const videoHeightAnim = useRef(new Animated.Value(1)).current; // Video height animation
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
   const [currentSentence, setCurrentSentence] = useState<PracticeSentence | null>(null);
+  // State for tracking sentence positions
+  const [sentenceLayouts, setSentenceLayouts] = useState<{[key: number]: number}>({});
+  const [showModeAlert, setShowModeAlert] = useState(false);
+
+  const handleSentenceLayout = (index: number, layout: any) => {
+    setSentenceLayouts(prev => ({
+      ...prev,
+      [index]: layout.y
+    }));
+  };
 
   useEffect(() => {
     // Test connection first
@@ -304,7 +394,11 @@ export default function ScriptPracticeScreen() {
   const scrollToCurrentSentence = (index: number) => {
     // Scroll to current sentence position
     if (scrollViewRef.current) {
-      const scrollPosition = index * 100; // Rough estimation of sentence height
+      // Use measured layout position if available, otherwise estimate
+      const scrollPosition = sentenceLayouts[index] || (index * 120);
+      
+      console.log(`📜 Scrolling to sentence ${index + 1} at position ${scrollPosition}px`);
+      
       scrollViewRef.current.scrollTo({
         y: scrollPosition,
         animated: true,
@@ -408,6 +502,9 @@ export default function ScriptPracticeScreen() {
     // Seek to sentence start
     audioPlayerRef.current.seekTo(sentence.start);
     
+    // Calculate sentence end time
+    const endTime = sentence.start + sentence.duration;
+    
     // Use AI-powered Voice Activity Detection for more accurate stopping
     if (Platform.OS === 'web' && audioPlayerRef.current.playWithVAD) {
       audioPlayerRef.current.playWithVAD(() => {
@@ -424,7 +521,7 @@ export default function ScriptPracticeScreen() {
             }, 500); // Small delay before next sentence
           }
         }
-      });
+      }, endTime); // Pass the end time to playWithVAD
     } else {
       // Fallback to timer-based approach for native or when VAD is not available
       audioPlayerRef.current.play();
@@ -432,39 +529,55 @@ export default function ScriptPracticeScreen() {
       // Auto-stop after sentence duration with some padding
       const paddingMs = 200; // 200ms padding to ensure complete playback
       const stopTimer = setTimeout(() => {
-        console.log('⏰ Timer-based stop after', sentence.duration + paddingMs, 'ms');
-        setIsPlaying(false);
-        setCurrentSentence(null);
-        
-        // Auto-advance to next sentence if Auto Play is enabled
-        if (isAutoPlay) {
-          const currentIndex = sentences.findIndex(s => s.start === sentence.start);
-          if (currentIndex < sentences.length - 1) {
-            setTimeout(() => {
-              playSentenceOnly(sentences[currentIndex + 1]);
-            }, 500); // Small delay before next sentence
+        if (audioPlayerRef.current) {
+          audioPlayerRef.current.pause();
+          console.log('⏰ Timer-based stop after', sentence.duration + paddingMs, 'ms');
+          setIsPlaying(false);
+          setCurrentSentence(null);
+          
+          // Auto-advance to next sentence if Auto Play is enabled
+          if (isAutoPlay) {
+            const currentIndex = sentences.findIndex(s => s.start === sentence.start);
+            if (currentIndex < sentences.length - 1) {
+              setTimeout(() => {
+                playSentenceOnly(sentences[currentIndex + 1]);
+              }, 500); // Small delay before next sentence
+            }
           }
         }
       }, sentence.duration * 1000 + paddingMs);
+
+      // Store the timer reference for cleanup
+      if (sentenceTimerRef.current) {
+        clearTimeout(sentenceTimerRef.current);
+      }
+      sentenceTimerRef.current = stopTimer;
     }
   };
 
   const handleSentencePress = async (index: number) => {
+    // 현재 재생 중인 경우 중지
+    if (isPlaying || isTTSPlaying) {
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.pause();
+        setIsPlaying(false);
+      }
+      TTSService.stop();
+      setIsTTSPlaying(false);
+      return;
+    }
+
     // Scroll to current sentence
     scrollToCurrentSentence(index);
     setCurrentSentenceIndex(index);
     
-         // Stop any existing audio playback
-     if (audioPlayerRef.current) {
-       audioPlayerRef.current.pause();
-       setIsAudioPlaying(false);
-     }
-    
-    // Play according to selected mode
-    const sentence = sentences[index];
-    
-    // Don't play if playbackMode is null (selection only)
-    if (!playbackMode) return;
+    // Show mode selection alert if no playback mode is selected
+    if (!playbackMode) {
+      setShowModeAlert(true);
+      // Auto hide after 3 seconds
+      setTimeout(() => setShowModeAlert(false), 3000);
+      return;
+    }
     
     // 타이머 정리
     if (sentenceTimerRef.current) {
@@ -472,20 +585,20 @@ export default function ScriptPracticeScreen() {
       sentenceTimerRef.current = null;
     }
     
+    const sentence = sentences[index];
+    
     // 선택된 모드에 따라 재생
     if (playbackMode === 'tts') {
       console.log('🗣️ Playing with TTS mode');
-      // Stop current TTS and immediately start new one (parallel execution)
-      TTSService.stop(); // Don't await - execute in parallel
-      speakSentence(sentence.text); // Start immediately
+      TTSService.stop();
+      await speakSentence(sentence.text);
     } else if (playbackMode === 'original') {
       console.log('🎵 Playing with Original mode');
       playSentenceOnly(sentence);
     }
-    
-       };
+  };
 
-   const handleAutoPlay = () => {
+  const handleAutoPlay = () => {
      if (isAutoPlay) {
        // Stop Auto Play when pausing
        setIsAutoPlay(false);
@@ -517,9 +630,9 @@ export default function ScriptPracticeScreen() {
          setPlaybackMode('original');
        }
        
-       startAutoPlay();
-     }
-   };
+      startAutoPlay();
+    }
+  };
 
   const startAutoPlay = () => {
     if (!isAutoPlay || currentSentenceIndex >= sentences.length) {
@@ -534,7 +647,7 @@ export default function ScriptPracticeScreen() {
     const playNextSentence = () => {
       const nextIndex = currentSentenceIndex + 1;
       if (nextIndex < sentences.length && isAutoPlay) {
-        setTimeout(() => {
+      setTimeout(() => {
           setCurrentSentenceIndex(nextIndex);
           scrollToCurrentSentence(nextIndex);
           
@@ -690,11 +803,119 @@ export default function ScriptPracticeScreen() {
     animateSwipe(index, false);
   };
 
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  // 제스처 이벤트 핸들러
+  const handleGestureEvent = (event: any, index: number) => {
+    if (swipeAnimations[index]) {
+      swipeAnimations[index].setValue(event.nativeEvent.translationX);
+    }
   };
+
+  // 제스처 상태 변경 핸들러
+  const handleGestureStateChange = (event: any, index: number) => {
+    if (event.nativeEvent.state === State.END) {
+      const { translationX } = event.nativeEvent;
+      
+      if (translationX < -100) {
+        handleSwipeLeft(index);
+      } else if (translationX > 100) {
+        handleSwipeRight(index);
+      }
+
+      Animated.spring(swipeAnimations[index], {
+        toValue: 0,
+        useNativeDriver: true,
+      }).start();
+    }
+  };
+
+  // 컨트롤 버튼 렌더링 컴포넌트
+  const renderControlButtons = () => (
+    <View style={styles.controlButtons}>
+      <TouchableOpacity
+        style={[
+          styles.controlButton,
+          styles.originalButton,
+          playbackMode === 'original' && styles.activeButton
+        ]}
+        onPress={() => {
+          if (playbackMode === 'original' && isPlaying) {
+            // 재생 중이면 중지
+            if (audioPlayerRef.current) {
+              audioPlayerRef.current.pause();
+              setIsPlaying(false);
+            }
+          } else {
+            // 재생 시작
+            setPlaybackMode('original');
+            if (currentSentenceIndex < sentences.length) {
+              playSentenceOnly(sentences[currentSentenceIndex]);
+            }
+          }
+        }}
+      >
+        <Text style={[
+          styles.controlButtonText,
+          playbackMode === 'original' && styles.activeButtonText
+        ]}>
+          {playbackMode === 'original' && isPlaying ? 'Pause' : 'Original'}
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[
+          styles.controlButton,
+          styles.ttsButton,
+          playbackMode === 'tts' && styles.activeButton
+        ]}
+        onPress={() => {
+          if (playbackMode === 'tts' && isTTSPlaying) {
+            // TTS 재생 중이면 중지
+            TTSService.stop();
+            setIsTTSPlaying(false);
+          } else {
+            // TTS 재생 시작
+            setPlaybackMode('tts');
+            if (currentSentenceIndex < sentences.length) {
+              speakSentence(sentences[currentSentenceIndex].text);
+            }
+          }
+        }}
+      >
+        <Text style={[
+          styles.controlButtonText,
+          playbackMode === 'tts' && styles.activeButtonText
+        ]}>
+          {playbackMode === 'tts' && isTTSPlaying ? 'Pause' : 'TTS'}
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[
+          styles.controlButton,
+          styles.playButton,
+          isAutoPlay && styles.activeButton
+        ]}
+        onPress={() => {
+          setIsAutoPlay(!isAutoPlay);
+          if (!isAutoPlay && currentSentenceIndex < sentences.length - 1) {
+            // 자동 재생 시작
+            if (playbackMode === 'tts') {
+              speakSentence(sentences[currentSentenceIndex].text);
+            } else if (playbackMode === 'original') {
+              playSentenceOnly(sentences[currentSentenceIndex]);
+            }
+          }
+        }}
+      >
+        <Text style={[
+          styles.controlButtonText,
+          isAutoPlay && styles.activeButtonText
+        ]}>
+          {isAutoPlay ? 'Stop Auto' : 'Auto Play'}
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
 
   if (loading) {
     return (
@@ -709,7 +930,7 @@ export default function ScriptPracticeScreen() {
     <GestureHandlerRootView style={styles.container}>
       <View style={styles.header}>
         <View style={styles.titleRow}>
-          <Text style={styles.title}>{videoTitle}</Text>
+        <Text style={styles.title}>{videoTitle}</Text>
           
           {/* Video Toggle Control - Compact and elegant button */}
           <TouchableOpacity
@@ -827,116 +1048,50 @@ export default function ScriptPracticeScreen() {
         </View>
       )}
 
-      <ScrollView ref={scrollViewRef} style={styles.scriptContainer}>
+      <ScrollView
+        ref={scrollViewRef}
+        style={styles.scriptContainer}
+        showsVerticalScrollIndicator={false}
+      >
         {sentences.map((sentence, index) => (
-          <PanGestureHandler
-            key={index}
-            onHandlerStateChange={(event) => {
-              if (event.nativeEvent.state === State.END) {
-                const { translationX } = event.nativeEvent;
-                if (translationX < -100) { // Swipe left 100px or more
-                  handleSwipeLeft(index);
-                } else if (translationX > 100) { // Swipe right 100px or more
-                  handleSwipeRight(index);
-                }
-              }
-            }}
+          <TouchableOpacity
+            key={`sentence-${index}`}
+            style={[
+              styles.sentenceContainer,
+              index === currentSentenceIndex && styles.currentSentence,
+              showingTranslation[index] && styles.translationMode,
+            ]}
+            onPress={() => handleSentencePress(index)}
+            onLayout={(event) => handleSentenceLayout(index, event.nativeEvent.layout)}
           >
-            <Animated.View
-              style={[
-                styles.sentenceContainer,
-                index === currentSentenceIndex && styles.currentSentence,
-                showingTranslation[index] && styles.translationMode,
-                {
-                  backgroundColor: getSwipeAnimation(index).interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [
-                      index === currentSentenceIndex ? '#667eea' : '#fff',
-                      '#f0f8ff'
-                    ],
-                  }),
-                  borderLeftWidth: getSwipeAnimation(index).interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [0, 4],
-                  }),
-                  borderLeftColor: '#4CAF50',
-                }
-              ]}
-            >
-              <TouchableOpacity
-                style={styles.sentenceContent}
-                onPress={() => handleSentencePress(index)}
-              >
-              <View style={styles.sentenceHeader}>
-                <Text style={[
-                  styles.sentenceNumber,
-                  index === currentSentenceIndex && styles.currentSentenceNumber
-                ]}>
-                  Sentence {index + 1}
-                  {index === currentSentenceIndex && isAudioPlaying && ' 🎵'}
-                  {showingTranslation[index] && ' 🇰🇷'}
-                </Text>
-                <Text style={[
-                  styles.sentenceTime,
-                  index === currentSentenceIndex && styles.currentSentenceTime
-                ]}>
-                  {formatTime(sentence.start)} - {formatTime(sentence.end)}
-                </Text>
-              </View>
-              
-              {showingTranslation[index] ? (
-                // Translation display mode
-                <View>
-                  <Text style={[
-                    styles.translationText,
-                    index === currentSentenceIndex && styles.currentTranslationText,
-                  ]}>
-                    {translations[index] || (translating[index] ? 'Translating...' : 'Translation failed')}
-                  </Text>
-                  <Text style={[
-                    styles.originalEnglishText,
-                    index === currentSentenceIndex && styles.currentOriginalEnglishText,
-                  ]}>
-                    {sentence.text}
-                  </Text>
-                </View>
-              ) : (
-                // Normal display mode
-                <Text
-                  style={[
-                    styles.sentenceText,
-                    index === currentSentenceIndex && styles.currentSentenceText,
-                  ]}
-                >
-                  {sentence.text}
-                </Text>
-              )}
-              
-              {sentence.originalWords && sentence.originalWords !== sentence.correctedWords && !showingTranslation[index] && (
-                <Text style={[
-                  styles.originalText,
-                  index === currentSentenceIndex && styles.currentOriginalText
-                ]}>
-                  📝 Original: {sentence.originalWords}
-                </Text>
-              )}
-              
-                {/* Swipe hints */}
-                {!showingTranslation[index] && !translations[index] && (
-                  <Text style={styles.swipeHint}>← Swipe to see Korean translation</Text>
-                )}
-                {showingTranslation[index] && (
-                  <Text style={styles.swipeHintReverse}>→ Swipe to see English original</Text>
-                )}
-              </TouchableOpacity>
-            </Animated.View>
-          </PanGestureHandler>
+            <View style={styles.sentenceHeader}>
+              <Text style={[
+                styles.sentenceNumber,
+                index === currentSentenceIndex && styles.currentSentenceNumber
+              ]}>
+                Sentence {index + 1}
+              </Text>
+              <Text style={[
+                styles.sentenceTime,
+                index === currentSentenceIndex && styles.currentSentenceTime
+              ]}>
+                {formatTime(sentence.start)} - {formatTime(sentence.end)}
+              </Text>
+            </View>
+            
+            <Text style={[
+              styles.sentenceText,
+              index === currentSentenceIndex && styles.currentSentenceText
+            ]}>
+              {sentence.text}
+            </Text>
+          </TouchableOpacity>
         ))}
       </ScrollView>
 
       <View style={styles.progressContainer}>
         <Text style={styles.progressText}>
-          {currentSentenceIndex + 1} of {sentences.length} sentences
+          Sentence {currentSentenceIndex + 1} of {sentences.length}
         </Text>
         <View style={styles.progressBar}>
           <View
@@ -954,14 +1109,34 @@ export default function ScriptPracticeScreen() {
         onSelect={(voiceId) => setSelectedVoice(voiceId)}
         selectedVoice={selectedVoice}
       />
+
+      {/* Mode Selection Alert */}
+      {showModeAlert && (
+        <View style={styles.alertContainer}>
+          <Text style={styles.alertText}>상단의 모드를 먼저 선택해주세요</Text>
+        </View>
+      )}
+
     </GestureHandlerRootView>
   );
 }
 
+const colors = {
+  primary: '#667eea',
+  background: '#f8fafc',
+  white: '#fff',
+  border: '#e0e0e0',
+  text: {
+    primary: '#333',
+    secondary: '#666',
+    light: '#999',
+  },
+};
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#f8fafc',
   },
   loadingContainer: {
     flex: 1,
@@ -1042,11 +1217,13 @@ const styles = StyleSheet.create({
     color: '#667eea',
   },
   controlButton: {
-    backgroundColor: '#f0f0f0',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20,
     flex: 1,
+    height: 40,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginHorizontal: 4,
+    backgroundColor: '#f5f5f5',
   },
   compactButton: {
     backgroundColor: '#f0f0f0',
@@ -1065,14 +1242,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#f3e5f5',
   },
   ttsButton: {
-    backgroundColor: '#fff3e0',
-  },
-  ttsControlButton: {
-    backgroundColor: '#ffe0b2',
-    flex: 0.5, // Smaller than other buttons
+    backgroundColor: '#e3f2fd',
   },
   originalButton: {
-    backgroundColor: '#e8f5e8',
+    backgroundColor: '#e8f5e9',
   },
   activeButton: {
     backgroundColor: '#667eea',
@@ -1205,47 +1378,151 @@ const styles = StyleSheet.create({
     marginTop: 4,
     textAlign: 'center',
   },
-  originalText: {
-    fontSize: 12,
-    color: '#999',
-    fontStyle: 'italic',
-    marginTop: 4,
-    lineHeight: 16,
+  controlButtons: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
   },
-  currentOriginalText: {
-    color: '#ddd',
+
+  controlButton: {
+    flex: 1,
+    height: 40,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginHorizontal: 4,
+    backgroundColor: '#f5f5f5',
   },
-  translationText: {
-    fontSize: 16,
-    lineHeight: 24,
-    color: '#1565C0',
-    fontWeight: '600',
+
+  originalButton: {
+    backgroundColor: '#e8f5e9',
+  },
+
+  ttsButton: {
+    backgroundColor: '#e3f2fd',
+  },
+
+  playButton: {
+    backgroundColor: '#fff3e0',
+  },
+
+  activeButton: {
+    backgroundColor: '#667eea',
+  },
+
+  controlButtonText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#666',
+  },
+
+  activeButtonText: {
+    color: '#fff',
+  },
+
+  bottomControls: {
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+    paddingBottom: Platform.OS === 'ios' ? 20 : 0, // iOS에서 하단 여백 추가
+  },
+
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalContent: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 20,
+    alignItems: 'center',
+    width: '80%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
     marginBottom: 8,
   },
-  currentTranslationText: {
-    color: '#134577',
-  },
-  originalEnglishText: {
+  modalSubtitle: {
     fontSize: 14,
-    lineHeight: 20,
     color: '#666',
-    fontStyle: 'italic',
+    textAlign: 'center',
+    marginBottom: 20,
   },
-  currentOriginalEnglishText: {
-    color: '#ccc',
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    width: '100%',
+    marginBottom: 20,
   },
-  swipeHint: {
+  modalButton: {
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    width: '45%',
+  },
+  originalModalButton: {
+    backgroundColor: '#e8f5e9',
+  },
+  ttsModalButton: {
+    backgroundColor: '#e3f2fd',
+  },
+  modalButtonText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  modalButtonSubtext: {
     fontSize: 12,
-    color: '#999',
-    textAlign: 'right',
+    color: '#666',
     marginTop: 4,
-    fontStyle: 'italic',
   },
-  swipeHintReverse: {
-    fontSize: 12,
-    color: '#1565C0',
-    textAlign: 'left',
-    marginTop: 4,
-    fontStyle: 'italic',
+  modalCloseButton: {
+    backgroundColor: '#f0f0f0',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+  },
+  modalCloseButtonText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#666',
+  },
+  alertContainer: {
+    position: 'absolute',
+    top: 50,
+    left: 20,
+    right: 20,
+    backgroundColor: '#fff3cd',
+    borderLeftWidth: 4,
+    borderLeftColor: '#ffc107',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    zIndex: 1000,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  alertText: {
+    color: '#856404',
+    fontSize: 14,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 }); 

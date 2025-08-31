@@ -89,7 +89,7 @@ export const getTranscriptData = async (videoId: string): Promise<TranscriptResu
       // We know YouTube subtitles worked before, try them first
       console.log('⚡ Previous source was YouTube, trying subtitles first...');
       try {
-        const youtubeResult = await getYouTubeSubtitles(videoId);
+        const youtubeResult = await getYouTubeSubtitles(videoId, true);
         if (youtubeResult.success && youtubeResult.sentences.length > 0) {
           console.log('✅ YouTube subtitles found (cached preference):', youtubeResult.sentences.length, 'sentences');
           return youtubeResult;
@@ -103,7 +103,7 @@ export const getTranscriptData = async (videoId: string): Promise<TranscriptResu
     // 1. Try YouTube subtitles (either first time or preferred source)
     try {
       console.log('📺 Trying YouTube subtitles...');
-      const youtubeResult = await getYouTubeSubtitles(videoId);
+      const youtubeResult = await getYouTubeSubtitles(videoId, true);
       if (youtubeResult.success && youtubeResult.sentences.length > 0) {
         console.log('✅ YouTube subtitles found:', youtubeResult.sentences.length, 'sentences');
         // Remember this worked
@@ -142,14 +142,18 @@ export const getTranscriptData = async (videoId: string): Promise<TranscriptResu
 };
 
 // Get YouTube subtitles
-export const getYouTubeSubtitles = async (videoId: string): Promise<TranscriptResult> => {
+export const getYouTubeSubtitles = async (videoId: string, useSpacy: boolean = true): Promise<TranscriptResult> => {
   try {
-    console.log('🌐 Attempting YouTube subtitles request to:', `${API_CONFIG.BASE_URL}/whisper/youtube-subtitles/${videoId}`);
-    const response = await fetch(`${API_CONFIG.BASE_URL}/whisper/youtube-subtitles/${videoId}`);
+    const url = `${API_CONFIG.BASE_URL}/whisper/youtube-subtitles/${videoId}${useSpacy ? '?useSpacy=true' : '?useSpacy=false'}`;
+    console.log('🌐 Attempting YouTube subtitles request to:', url);
+    const response = await fetch(url);
     console.log('📡 YouTube subtitles response status:', response.status);
     const data = await response.json();
 
     if (data.success && data.sentences) {
+      console.log(`🧠 spaCy enhancement: ${data.spacyImproved ? 'applied' : 'not applied'}`);
+      console.log(`📝 Source: ${data.source}`);
+      
       return {
         success: true,
         source: 'youtube',

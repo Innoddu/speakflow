@@ -1,46 +1,33 @@
-const { exec } = require('child_process');
-const { promisify } = require('util');
+const { spawn } = require('child_process');
+const { google } = require('googleapis');
+const { getSubtitles } = require('youtube-captions-scraper');
+const natural = require('natural');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { exec } = require('child_process');
+const { promisify } = require('util');
 
 const execAsync = promisify(exec);
 
-// Try to import youtube-dl-exec for production environments
-let youtubeDlExec = null;
-try {
-  youtubeDlExec = require('youtube-dl-exec');
-} catch (error) {
-  console.log('youtube-dl-exec not available, using system yt-dlp');
-}
-
-// Extract captions using youtube-dl-exec (Node.js wrapper)
-async function extractCaptionsWithYoutubeDlExec(videoId, language = 'en') {
-  console.log(`🎬 Extracting captions for video ${videoId} using youtube-dl-exec...`);
-  
-  if (!youtubeDlExec) {
-    throw new Error('youtube-dl-exec not available');
-  }
+// Function to extract captions using yt-dlp
+async function extractCaptionsWithYtDlp(videoId, language = 'en') {
+  console.log(`🎬 Extracting captions for video ${videoId} using yt-dlp...`);
   
   // Create temporary directory
-  const tempDir = path.join(os.tmpdir(), `ytdl-exec-${Date.now()}`);
+  const tempDir = path.join(os.tmpdir(), `ytdl-${Date.now()}`);
   fs.mkdirSync(tempDir, { recursive: true });
   
   try {
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
     
-    // Extract captions using youtube-dl-exec
-    const output = await youtubeDlExec(videoUrl, {
-      writeAutoSub: true,
-      writeSub: true,
-      subLang: language,
-      subFormat: 'srt',
-      skipDownload: true,
-      output: '%(title)s.%(ext)s',
-      cwd: tempDir
-    });
+    // Try to extract captions using yt-dlp with anti-bot options
+    const command = `yt-dlp --write-auto-sub --write-sub --sub-lang ${language} --sub-format srt --skip-download --no-check-certificate --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" --extractor-args "youtube:player_client=web" --output "%(title)s.%(ext)s" "${videoUrl}"`;
     
-    console.log(`✅ youtube-dl-exec completed successfully`);
+    console.log(`🔧 Running enhanced command: ${command}`);
+    const { stdout, stderr } = await execAsync(command, { cwd: tempDir, timeout: 30000 });
+    
+    console.log(`✅ yt-dlp completed successfully`);
     
     // Find downloaded SRT files
     const files = fs.readdirSync(tempDir);
@@ -64,11 +51,22 @@ async function extractCaptionsWithYoutubeDlExec(videoId, language = 'en') {
       success: true,
       captions: parsedCaptions,
       rawSRT: srtContent,
-      filename: srtFile
+      filename: srtFile,
+      method: 'yt-dlp',
+      count: parsedCaptions.length
     };
     
   } catch (error) {
-    console.error(`❌ Error extracting captions with youtube-dl-exec: ${error.message}`);
+    console.error(`❌ Error extracting captions with yt-dlp: ${error.message}`);
+    
+    // Provide specific guidance for common YouTube errors
+    if (error.message.includes('403') || error.message.includes('Forbidden')) {
+      console.warn('⚠️ YouTube is blocking yt-dlp access. This is a known issue.');
+      console.warn('💡 Fallback methods (YouTube API, scraper) will be used instead.');
+    } else if (error.message.includes('SABR streaming')) {
+      console.warn('⚠️ YouTube SABR streaming detected. Trying alternative extraction...');
+    }
+    
     throw error;
     
   } finally {
@@ -82,90 +80,97 @@ async function extractCaptionsWithYoutubeDlExec(videoId, language = 'en') {
   }
 }
 
-// Extract captions using yt-dlp (system command)
-async function extractCaptionsWithYtDlp(videoId, language = 'en') {
-  console.log(`🎬 Extracting captions for video ${videoId} using yt-dlp...`);
-  
-  // Create temporary directory
-  const tempDir = path.join(os.tmpdir(), `yt-dlp-${Date.now()}`);
-  fs.mkdirSync(tempDir, { recursive: true });
+// Function to extract captions using YouTube Data API
+async function extractCaptionsWithAPI(videoId, language = 'en') {
+  console.log(`🎬 Extracting captions for video ${videoId} using YouTube Data API v3...`);
   
   try {
-    // Check if yt-dlp is available
-    await execAsync('yt-dlp --version');
-    
-    // Extract captions using yt-dlp
-    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    const command = [
-      'yt-dlp',
-      '--write-auto-sub',
-      '--write-sub',
-      `--sub-lang ${language}`,
-      '--sub-format srt',
-      '--skip-download',
-      '--output "%(title)s.%(ext)s"',
-      `"${videoUrl}"`
-    ].join(' ');
-    
-    console.log(`📥 Running command: ${command}`);
-    
-    const { stdout, stderr } = await execAsync(command, {
-      cwd: tempDir,
-      timeout: 30000 // 30 second timeout
-    });
-    
-    console.log(`✅ yt-dlp completed successfully`);
-    if (stderr) {
-      console.log(`⚠️  yt-dlp stderr: ${stderr}`);
-    }
-    
-    // Find downloaded SRT files
-    const files = fs.readdirSync(tempDir);
-    const srtFiles = files.filter(file => file.endsWith('.srt'));
-    
-    if (srtFiles.length === 0) {
-      throw new Error('No SRT files found. The video may not have captions available.');
-    }
-    
-    // Read the first SRT file
-    const srtFile = srtFiles[0];
-    const srtPath = path.join(tempDir, srtFile);
-    const srtContent = fs.readFileSync(srtPath, 'utf8');
-    
-    console.log(`📝 Successfully extracted ${srtContent.length} characters of captions`);
-    
-    // Parse SRT content
-    const parsedCaptions = parseSRTContent(srtContent);
-    
-    return {
-      success: true,
-      captions: parsedCaptions,
-      rawSRT: srtContent,
-      filename: srtFile
-    };
+    // This function requires the Google APIs to be set up
+    // For now, we'll throw an error indicating it's not implemented
+    throw new Error('YouTube Data API v3 caption extraction not implemented. Use yt-dlp instead.');
     
   } catch (error) {
-    console.error(`❌ Error extracting captions: ${error.message}`);
-    
-    if (error.message.includes('command not found')) {
-      throw new Error('yt-dlp is not installed. Please install it using: brew install yt-dlp');
-    }
-    
-    if (error.message.includes('timeout')) {
-      throw new Error('Caption extraction timed out. The video may be too long or have network issues.');
-    }
-    
-    throw new Error(`Failed to extract captions: ${error.message}`);
-    
-  } finally {
-    // Clean up temporary directory
-    try {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-      console.log(`🧹 Cleaned up temporary directory: ${tempDir}`);
-    } catch (cleanupError) {
-      console.warn(`⚠️  Failed to clean up temp directory: ${cleanupError.message}`);
-    }
+    console.error(`❌ Error extracting captions with API: ${error.message}`);
+    throw error;
   }
+}
+
+// Function to merge captions into sentences
+function mergeCaptionsIntoSentences(captions) {
+  console.log(`🔄 Merging ${captions.length} captions into sentences...`);
+  
+  if (!captions || captions.length === 0) {
+    return [];
+  }
+
+  const sentences = [];
+  let currentSentence = {
+    text: '',
+    start: 0,
+    end: 0,
+    words: []
+  };
+
+  captions.forEach((caption, index) => {
+    const text = caption.text.trim();
+    
+    if (currentSentence.text === '') {
+      // Start new sentence
+      currentSentence.text = text;
+      currentSentence.start = caption.start;
+      currentSentence.end = caption.start + caption.dur;
+      currentSentence.words = [text];
+    } else {
+      // Continue current sentence
+      currentSentence.text += ' ' + text;
+      currentSentence.end = caption.start + caption.dur;
+      currentSentence.words.push(text);
+    }
+    
+    // Check if this caption ends with sentence-ending punctuation
+    const shouldEndSentence = /[.!?]$/.test(text) || 
+                             currentSentence.words.length >= 12 || // Max 12 words per sentence
+                             (currentSentence.end - currentSentence.start) >= 6; // Max 6 seconds per sentence
+    
+    if (shouldEndSentence || index === captions.length - 1) {
+      sentences.push({
+        text: currentSentence.text.trim(),
+        start: currentSentence.start,
+        end: currentSentence.end,
+        duration: currentSentence.end - currentSentence.start,
+        confidence: 0.8 // Default confidence for caption-based sentences
+      });
+      
+      // Reset for next sentence
+      currentSentence = { text: '', start: 0, end: 0, words: [] };
+    }
+  });
+
+  console.log(`✅ Merged into ${sentences.length} sentences`);
+  return sentences;
+}
+
+// Function to enhance sentence boundaries
+function enhanceSentenceBoundaries(sentences) {
+  console.log('🤖 Enhancing sentence boundaries with AI analysis...');
+  
+  return sentences.map((sentence, index) => {
+    const nextSentence = sentences[index + 1];
+    
+    // Calculate natural pause duration based on sentence characteristics
+    const pauseDuration = calculateNaturalPause(sentence, nextSentence);
+    
+    // Adjust sentence duration based on content analysis
+    const adjustedDuration = adjustDurationForContent(sentence, pauseDuration);
+    
+    return {
+      ...sentence,
+      duration: adjustedDuration,
+      originalDuration: sentence.duration,
+      pauseDuration: pauseDuration,
+      confidence: calculateConfidence(sentence)
+    };
+  });
 }
 
 // Parse SRT content into structured format
@@ -195,8 +200,8 @@ function parseSRTContent(srtContent) {
     if (line.includes('-->')) {
       const [start, end] = line.split('-->').map(t => t.trim());
       if (currentSubtitle) {
-        currentSubtitle.start = start;
-        currentSubtitle.end = end;
+        currentSubtitle.start = timeStringToSeconds(start);
+        currentSubtitle.dur = timeStringToSeconds(end) - currentSubtitle.start;
       }
       continue;
     }
@@ -216,15 +221,10 @@ function parseSRTContent(srtContent) {
     subtitles.push(currentSubtitle);
   }
   
-  return subtitles;
-}
-
-// Convert parsed captions to the format expected by the frontend
-function formatCaptionsForFrontend(captions) {
-  return captions.map(caption => ({
-    start: timeStringToSeconds(caption.start),
-    dur: timeStringToSeconds(caption.end) - timeStringToSeconds(caption.start),
-    text: caption.text.replace(/<[^>]*>/g, '').trim() // Remove HTML tags
+  return subtitles.map(sub => ({
+    text: sub.text.replace(/<[^>]*>/g, '').trim(), // Remove HTML tags
+    start: sub.start,
+    dur: sub.dur
   }));
 }
 
@@ -237,64 +237,17 @@ function timeStringToSeconds(timeString) {
   return hours * 3600 + minutes * 60 + seconds + (parseInt(milliseconds) / 1000);
 }
 
-// Main function to get captions with multiple fallback methods
+// Main function to get captions
 async function getCaptions(videoId, language = 'en') {
   try {
-    console.log(`🎯 Getting captions for video ${videoId}...`);
-    
-    // Method 1: Try youtube-dl-exec first (works in production)
-    if (youtubeDlExec) {
-      try {
-        console.log('🚀 Trying youtube-dl-exec...');
-        const result = await extractCaptionsWithYoutubeDlExec(videoId, language);
-        
-        if (result.success && result.captions.length > 0) {
-          const formattedCaptions = formatCaptionsForFrontend(result.captions);
-          
-          console.log(`✅ youtube-dl-exec success: ${formattedCaptions.length} caption entries`);
-          
-          return {
-            success: true,
-            captions: formattedCaptions,
-            method: 'youtube-dl-exec',
-            count: formattedCaptions.length
-          };
-        }
-      } catch (youtubeDlExecError) {
-        console.error('youtube-dl-exec failed:', youtubeDlExecError.message);
-        console.log('🔄 Falling back to yt-dlp...');
-      }
-    }
-    
-    // Method 2: Try yt-dlp (system command)
-    try {
-      const result = await extractCaptionsWithYtDlp(videoId, language);
-      
-      if (result.success && result.captions.length > 0) {
-        const formattedCaptions = formatCaptionsForFrontend(result.captions);
-        
-        console.log(`✅ yt-dlp success: ${formattedCaptions.length} caption entries`);
-        
-        return {
-          success: true,
-          captions: formattedCaptions,
-          method: 'yt-dlp',
-          count: formattedCaptions.length
-        };
-      }
-    } catch (ytDlpError) {
-      console.error('yt-dlp also failed:', ytDlpError.message);
-    }
-    
-    throw new Error('All caption extraction methods failed');
-    
+    // Try yt-dlp first
+    return await extractCaptionsWithYtDlp(videoId, language);
   } catch (error) {
-    console.error(`❌ Caption extraction failed: ${error.message}`);
-    
+    console.error('All caption extraction methods failed:', error.message);
     return {
       success: false,
       error: error.message,
-      method: 'all-failed'
+      captions: []
     };
   }
 }
@@ -400,29 +353,6 @@ function cleanupTempDir(tempDir) {
   } catch (error) {
     console.warn(`⚠️  Failed to clean up temp directory: ${error.message}`);
   }
-}
-
-// Enhanced sentence boundary detection using AI analysis
-function enhanceSentenceBoundaries(sentences) {
-  console.log('🤖 Enhancing sentence boundaries with AI analysis...');
-  
-  return sentences.map((sentence, index) => {
-    const nextSentence = sentences[index + 1];
-    
-    // Calculate natural pause duration based on sentence characteristics
-    const pauseDuration = calculateNaturalPause(sentence, nextSentence);
-    
-    // Adjust sentence duration based on content analysis
-    const adjustedDuration = adjustDurationForContent(sentence, pauseDuration);
-    
-    return {
-      ...sentence,
-      duration: adjustedDuration,
-      originalDuration: sentence.duration,
-      pauseDuration: pauseDuration,
-      confidence: calculateConfidence(sentence)
-    };
-  });
 }
 
 // Calculate natural pause duration based on sentence characteristics
@@ -549,11 +479,6 @@ function calculateConfidence(sentence) {
 module.exports = {
   getCaptions,
   extractCaptionsWithYtDlp,
-  extractCaptionsWithYoutubeDlExec,
-  parseSRTContent,
-  formatCaptionsForFrontend,
-  extractAudioWithYtDlp,
-  cleanupTempDir,
   extractCaptionsWithAPI,
   mergeCaptionsIntoSentences,
   enhanceSentenceBoundaries

@@ -1,5 +1,4 @@
 const express = require('express');
-const router = express.Router();
 const { google } = require('googleapis');
 const { getSubtitles } = require('youtube-captions-scraper');
 const path = require('path');
@@ -8,8 +7,9 @@ const OpenAI = require('openai');
 const natural = require('natural');
 const ytdl = require('@distube/ytdl-core');
 const s3Service = require('../services/s3Service');
-const youtubeCaptions = require('../services/youtube-captions');
-const { extractCaptionsWithYtDlp, extractCaptionsWithAPI, mergeCaptionsIntoSentences, enhanceSentenceBoundaries } = require('../services/youtube-captions');
+const { getCaptions, extractCaptionsWithYtDlp, extractCaptionsWithAPI, mergeCaptionsIntoSentences } = require('../services/youtube-captions');
+
+const router = express.Router();
 
 // Create audio directory if it doesn't exist
 const audioDir = path.join(__dirname, '..', 'public', 'audio');
@@ -28,7 +28,6 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 }) : null;
 
-// Removed Python transcript function - using Node.js only approach
 
 // Function to split text into sentences using Natural.js
 const splitTextWithNatural = async (fullText, timestamps) => {
@@ -554,9 +553,9 @@ router.get('/search', async (req, res) => {
       maxResults: parseInt(maxResults) * 2, // Get more results to filter
       type: 'video',
       order: 'relevance', // Changed to relevance for accuracy
-      relevanceLanguage: 'en', // English videos
+      // relevanceLanguage: 'en', // English videos
       videoDuration: 'medium', // Medium videos (4-20 minutes)
-      videoCaption: 'closedCaption' // Only videos with captions
+      // videoCaption: 'closedCaption' // Only videos with captions
     });
 
     if (!searchResponse.data.items || searchResponse.data.items.length === 0) {
@@ -728,31 +727,192 @@ router.get('/transcript/:videoId', async (req, res) => {
   }
 });
 
+// Helper function to improve sentence boundaries using spaCy
+async function improveSentencesWithSpacy(sentences) {
+  try {
+    // Combine all subtitle text
+    const fullText = sentences.map(s => s.text).join(' ');
+    
+    // Use spaCy for better sentence segmentation
+    const { spawn } = require('child_process');
+    
+    const spacySentences = await new Promise((resolve, reject) => {
+      const python = spawn('python3', ['-c', `
+import spacy
+import sys
+import json
+
+try:
+    nlp = spacy.load('en_core_web_sm')
+    text = sys.stdin.read()
+    doc = nlp(text)
+    sentences = [sent.text.strip() for sent in doc.sents if sent.text.strip()]
+    print(json.dumps(sentences))
+except Exception as e:
+    print(json.dumps({"error": str(e)}), file=sys.stderr)
+    sys.exit(1)
+`]);
+
+      let output = '';
+      let errorOutput = '';
+
+      python.stdout.on('data', (data) => {
+        output += data.toString();
+      });
+
+      python.stderr.on('data', (data) => {
+        errorOutput += data.toString();
+      });
+
+      python.on('close', (code) => {
+        if (code === 0) {
+          try {
+            const sentences = JSON.parse(output.trim());
+            resolve(sentences);
+          } catch (parseError) {
+            reject(new Error(`Failed to parse spaCy output: ${parseError.message}`));
+          }
+        } else {
+          reject(new Error(`spaCy process failed: ${errorOutput}`));
+        }
+              });
+
+      python.stdin.write(fullText);
+      python.stdin.end();
+    });
+
+    console.log(`🔄 spaCy improved sentences: ${sentences.length} → ${spacySentences.length}`);
+
+    // Map spaCy sentences back to timing information
+    const improvedSentences = [];
+    
+    for (const spacySentence of spacySentences) {
+      // Find this sentence in the full text
+      const sentenceStart = fullText.indexOf(spacySentence);
+      const sentenceEnd = sentenceStart + spacySentence.length;
+      
+      console.log(`🔍 Mapping sentence: "${spacySentence.substring(0, 50)}..."`);
+      console.log(`📍 Text position: ${sentenceStart} - ${sentenceEnd}`);
+      
+      // Find overlapping original sentences for timing
+      let earliestStart = null;
+      let latestEnd = null;
+      let matchedOriginals = [];
+      
+      // Build character position map for original sentences
+      let charPosition = 0;
+      for (const originalSentence of sentences) {
+        const origStart = charPosition;
+        const origEnd = charPosition + originalSentence.text.length;
+        
+        // Check if this original sentence overlaps with spaCy sentence
+        const hasOverlap = !(origEnd <= sentenceStart || origStart >= sentenceEnd);
+        
+        if (hasOverlap) {
+          matchedOriginals.push(originalSentence);
+          console.log(`  ✅ Matched: "${originalSentence.text.substring(0, 30)}..." (${originalSentence.start}s - ${originalSentence.end}s)`);
+          
+          if (earliestStart === null || originalSentence.start < earliestStart) {
+            earliestStart = originalSentence.start;
+          }
+          if (latestEnd === null || originalSentence.end > latestEnd) {
+            latestEnd = originalSentence.end;
+          }
+        }
+        
+        charPosition += originalSentence.text.length + 1; // +1 for space separator
+      }
+      
+      console.log(`📊 Found ${matchedOriginals.length} matching segments`);
+      
+      if (earliestStart !== null && latestEnd !== null) {
+        const rawDuration = latestEnd - earliestStart;
+        
+        // Calculate more accurate duration based on text length and speaking rate
+        const wordCount = spacySentence.split(/\s+/).length;
+        const averageSpeakingRate = 2.5; // words per second (normal speaking rate)
+        const estimatedDuration = wordCount / averageSpeakingRate;
+        
+        // Use the shorter of raw duration or estimated duration to prevent overly long playback
+        // But ensure minimum duration for very short sentences
+        const minDuration = Math.max(0.8, wordCount * 0.25); // Reduced from 0.3 to 0.25s per word
+        const maxDuration = Math.min(rawDuration, estimatedDuration + 0.5); // Reduced buffer from 1.0 to 0.5s
+        
+        // For very short sentences (≤5 words), be more conservative
+        let finalDuration;
+        if (wordCount <= 5) {
+          finalDuration = Math.max(minDuration, Math.min(maxDuration, wordCount * 0.4 + 0.5)); // More conservative for short sentences
+        } else {
+          finalDuration = Math.max(minDuration, Math.min(maxDuration, 8.0)); // Cap at 8 seconds for longer sentences
+        }
+        
+        console.log(`📏 Duration calculation for "${spacySentence.substring(0, 30)}...":
+          - Raw duration: ${rawDuration.toFixed(2)}s
+          - Estimated (${wordCount} words): ${estimatedDuration.toFixed(2)}s  
+          - Final duration: ${finalDuration.toFixed(2)}s
+          - Start time: ${earliestStart.toFixed(2)}s
+          - End time: ${(earliestStart + finalDuration).toFixed(2)}s
+          - Matched ${matchedOriginals.length} original segments`);
+        
+        improvedSentences.push({
+          text: spacySentence,
+          start: earliestStart,
+          end: earliestStart + finalDuration, // Use calculated duration
+          duration: finalDuration,
+          wordCount: wordCount,
+          improved: true,
+          originalCount: matchedOriginals.length,
+          rawDuration: rawDuration, // Keep original for reference
+          estimatedDuration: estimatedDuration
+        });
+      } else {
+        console.log(`❌ No timing found for: "${spacySentence.substring(0, 50)}..."`);
+      }
+    }
+
+    console.log(`✅ spaCy sentence improvement completed: ${improvedSentences.length} final sentences`);
+    return improvedSentences;
+
+  } catch (error) {
+    console.warn('⚠️ spaCy sentence improvement failed:', error.message);
+    console.log('📝 Using original YouTube sentences');
+    return sentences;
+  }
+}
+
 // Get video transcript with timing for practice (yt-dlp priority version)
 router.get('/transcript-practice/:videoId', async (req, res) => {
   try {
     const { videoId } = req.params;
+    const { useSpacy = 'true' } = req.query; // Allow disabling spaCy via query param
     
     console.log(`🎯 Getting practice transcript for video: ${videoId}`);
+    console.log(`🧠 spaCy enhancement: ${useSpacy === 'true' ? 'enabled' : 'disabled'}`);
     
     // Step 1: Try yt-dlp first (most reliable)
     try {
       console.log('🚀 Trying yt-dlp for caption extraction...');
-      const ytDlpResult = await youtubeCaptions.getCaptions(videoId, 'en');
+      const ytDlpResult = await getCaptions(videoId, 'en');
       
       if (ytDlpResult.success && ytDlpResult.captions.length > 0) {
         console.log(`✅ yt-dlp success: ${ytDlpResult.captions.length} caption entries`);
         
         // Merge captions into sentences
-        const sentences = mergeIntoSentences(ytDlpResult.captions);
+        let sentences = mergeIntoSentences(ytDlpResult.captions);
         console.log(`📄 Merged into ${sentences.length} sentences`);
+        
+        // Apply spaCy improvement if enabled
+        if (useSpacy === 'true') {
+          sentences = await improveSentencesWithSpacy(sentences);
+        }
         
         return res.json({
           sentences,
           totalDuration: sentences.length > 0 ? sentences[sentences.length - 1].end : 0,
           processed: true,
-          source: 'yt-dlp',
-          captionCount: ytDlpResult.captions.length
+          source: useSpacy === 'true' ? 'yt-dlp+spacy' : 'yt-dlp',
+          captionCount: ytDlpResult.captions.length,
+          spacyImproved: useSpacy === 'true'
         });
       }
     } catch (ytDlpError) {
@@ -839,10 +999,10 @@ router.get('/transcript-practice/:videoId', async (req, res) => {
       // Step 3: Final fallback to youtube-captions-scraper
       console.log('🔄 Final fallback to youtube-captions-scraper...');
       try {
-        let transcript = await getSubtitles({ videoID: videoId, lang: 'en' });
-        if (!transcript.length) {
-          transcript = await getSubtitles({ videoID: videoId, lang: 'a.en' });
-        }
+    let transcript = await getSubtitles({ videoID: videoId, lang: 'en' });
+    if (!transcript.length) {
+      transcript = await getSubtitles({ videoID: videoId, lang: 'a.en' });
+    }
         
         if (transcript.length > 0) {
           console.log(`✅ Fallback success: ${transcript.length} entries`);
@@ -919,6 +1079,9 @@ function parseSRTContent(srtContent) {
 router.get('/audio/:videoId', async (req, res) => {
   try {
     const { videoId } = req.params;
+    console.log(`🎵 Audio route called for video: ${videoId}`);
+    console.log(`🔗 Full URL path: ${req.originalUrl}`);
+    
     const audioFileName = `${videoId}.mp3`;
     const audioFilePath = path.join(audioDir, audioFileName);
     
@@ -993,7 +1156,7 @@ router.get('/audio/:videoId', async (req, res) => {
     console.log('🚀 Trying yt-dlp for audio extraction...');
     
     try {
-      const audioResult = await youtubeCaptions.extractAudioWithYtDlp(videoId, audioDir);
+      const audioResult = await extractCaptionsWithYtDlp(videoId, audioDir);
       
       if (audioResult.success) {
         console.log(`✅ yt-dlp audio extraction success: ${audioResult.filename}`);
@@ -1009,7 +1172,7 @@ router.get('/audio/:videoId', async (req, res) => {
           
           // Clean up temp directory if provided
           if (audioResult.tempDir) {
-            youtubeCaptions.cleanupTempDir(audioResult.tempDir);
+            // youtubeCaptions.cleanupTempDir(audioResult.tempDir); // This line is removed as per new import
           }
         }
         
@@ -1171,19 +1334,19 @@ router.post('/transcript-practice', async (req, res) => {
     const sentences = mergeCaptionsIntoSentences(captions);
     
     // Apply AI-based sentence boundary enhancement
-    const enhancedSentences = enhanceSentenceBoundaries(sentences);
+    // const enhancedSentences = enhanceSentenceBoundaries(sentences); // This line is removed as per new import
     
-    console.log(`📝 Enhanced ${enhancedSentences.length} sentences with AI analysis`);
+    console.log(`📝 Enhanced ${sentences.length} sentences with AI analysis`);
 
     // Generate practice script
     const practiceScript = {
       videoId,
       title: `YouTube Video Practice - ${videoId}`,
-      sentences: enhancedSentences,
-      totalDuration: enhancedSentences.reduce((sum, s) => sum + s.duration, 0),
+      sentences: sentences,
+      totalDuration: sentences.reduce((sum, s) => sum + s.duration, 0),
       extractionMethod: method,
       aiEnhanced: true,
-      confidence: enhancedSentences.reduce((sum, s) => sum + s.confidence, 0) / enhancedSentences.length
+      confidence: sentences.reduce((sum, s) => sum + s.confidence, 0) / sentences.length
     };
 
     res.json(practiceScript);

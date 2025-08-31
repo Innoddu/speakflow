@@ -13,8 +13,9 @@ import {
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
-import { getHistory, removeFromHistory, clearHistory, HistoryVideo } from '../services/historyService';
+import { getHistory, removeFromHistory, clearHistory, HistoryVideo, removeFromHistoryWithCache, clearHistoryWithCache } from '../services/historyService';
 import { Ionicons } from '@expo/vector-icons';
+import WebAlert from '../components/WebAlert';
 
 type HistoryScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'History'>;
 
@@ -60,20 +61,46 @@ export default function HistoryScreen() {
   };
 
   const handleRemoveVideo = (videoId: string, title: string) => {
-    Alert.alert(
-      'Remove from History',
-      `Remove "${title}" from your learning history?`,
+    WebAlert.alert(
+      'Delete Video Data',
+      `Do you want to permanently delete "${title}" and all its cached data?\n\n• Video will be removed from history\n• Audio files will be deleted from S3\n• Transcript cache will be cleared\n\nThis action cannot be undone.`,
       [
         { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
+        { 
+          text: 'Remove Only from History', 
           onPress: async () => {
             try {
               await removeFromHistory(videoId);
               setHistory(prev => prev.filter(item => item.videoId !== videoId));
+              WebAlert.alert('Removed', 'Video removed from history (cache preserved)');
             } catch (error) {
-              Alert.alert('Error', 'Failed to remove video from history');
+              WebAlert.alert('Error', 'Failed to remove video from history');
+            }
+          }
+        },
+        {
+          text: 'Delete Everything',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const result = await removeFromHistoryWithCache(videoId);
+              setHistory(prev => prev.filter(item => item.videoId !== videoId));
+              
+              // Show detailed result
+              const cacheInfo = result.cacheCleanup;
+              let message = `"${result.videoTitle}" has been completely removed.`;
+              
+              if (cacheInfo && cacheInfo.summary) {
+                message += `\n\n📊 Cache cleanup: ${cacheInfo.summary.totalFilesDeleted} files deleted`;
+                if (cacheInfo.s3Cache.audioDeleted) message += '\n• S3 audio file deleted';
+                if (cacheInfo.s3Cache.whisperDeleted) message += '\n• S3 transcript cache deleted';
+                if (cacheInfo.localCache.audioDeleted) message += '\n• Local audio file deleted';
+                if (cacheInfo.localCache.whisperDeleted) message += '\n• Local transcript cache deleted';
+              }
+              
+              WebAlert.alert('Deleted Successfully', message);
+            } catch (error) {
+              WebAlert.alert('Error', 'Failed to delete video data: ' + (error instanceof Error ? error.message : 'Unknown error'));
             }
           },
         },
@@ -82,21 +109,50 @@ export default function HistoryScreen() {
   };
 
   const handleClearHistory = () => {
-    Alert.alert(
+    WebAlert.alert(
       'Clear All History',
-      'Are you sure you want to clear your entire learning history? This cannot be undone.',
+      `Choose how to clear your learning history:\n\n📋 History Only: Keep cache for faster loading\n🗑️ Everything: Delete all cached data (audio files, transcripts)\n\nTotal videos: ${history.length}`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Clear All',
-          style: 'destructive',
+          text: 'Clear History Only',
           onPress: async () => {
             try {
               await clearHistory();
               setHistory([]);
+              WebAlert.alert('Cleared', 'History cleared (cache preserved for faster loading)');
             } catch (error) {
-              Alert.alert('Error', 'Failed to clear history');
+              WebAlert.alert('Error', 'Failed to clear history');
             }
+          },
+        },
+        {
+          text: 'Delete Everything',
+          style: 'destructive',
+          onPress: async () => {
+            WebAlert.alert(
+              'Confirm Complete Deletion',
+              `This will permanently delete:\n• All ${history.length} videos from history\n• All audio files from S3\n• All transcript caches\n\nThis may take a moment and cannot be undone.`,
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Delete All',
+                  style: 'destructive',
+                  onPress: async () => {
+                    try {
+                      setLoading(true);
+                      await clearHistoryWithCache();
+                      setHistory([]);
+                      WebAlert.alert('Success', 'All learning history and cached data have been permanently deleted.');
+                    } catch (error) {
+                      WebAlert.alert('Error', 'Failed to clear history with cache: ' + (error instanceof Error ? error.message : 'Unknown error'));
+                    } finally {
+                      setLoading(false);
+                    }
+                  },
+                },
+              ]
+            );
           },
         },
       ]

@@ -1,3 +1,4 @@
+// Convert to ESM imports
 const express = require('express');
 const router = express.Router();
 const OpenAI = require('openai');
@@ -6,7 +7,80 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const s3Service = require('../services/s3Service');
+const { google } = require('googleapis');
+const { getSubtitles } = require('youtube-captions-scraper');
+const natural = require('natural');
 
+// Initialize sentence tokenizer (fallback)
+const naturalTokenizer = new natural.SentenceTokenizer();
+
+// Test spaCy availability
+let spacyAvailable = false;
+(async () => {
+  try {
+    // Test if spaCy is available by running a simple Python command
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
+    
+    await execAsync('python3 -c "import spacy; nlp = spacy.load(\'en_core_web_sm\'); print(\'spaCy test successful\')"');
+    spacyAvailable = true;
+    console.log('✅ spaCy English model loaded successfully');
+  } catch (error) {
+    console.warn('⚠️ spaCy not available, falling back to natural tokenizer');
+    console.warn('Error:', error.message);
+  }
+})();
+
+// Function to tokenize sentences using spaCy
+async function tokenizeWithSpacy(text) {
+  return new Promise((resolve, reject) => {
+    const python = spawn('python3', ['-c', `
+import spacy
+import sys
+import json
+
+try:
+    nlp = spacy.load('en_core_web_sm')
+    text = sys.stdin.read()
+    doc = nlp(text)
+    sentences = [sent.text.strip() for sent in doc.sents if sent.text.strip()]
+    print(json.dumps(sentences))
+except Exception as e:
+    print(json.dumps({"error": str(e)}), file=sys.stderr)
+    sys.exit(1)
+`]);
+
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          const sentences = JSON.parse(output.trim());
+          resolve(sentences);
+        } catch (parseError) {
+          reject(new Error(`Failed to parse spaCy output: ${parseError.message}`));
+        }
+      } else {
+        reject(new Error(`spaCy process failed: ${errorOutput}`));
+      }
+    });
+
+    python.stdin.write(text);
+    python.stdin.end();
+  });
+}
+
+// Initialize OpenAI
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -117,7 +191,21 @@ router.get('/cached/:videoId', async (req, res) => {
       const s3CacheExists = await s3Service.whisperCacheExists(videoId);
       if (s3CacheExists) {
         console.log('✅ Whisper: Found cached result in S3 for video:', videoId);
-        const cachedData = await s3Service.getWhisperCache(videoId);
+        let cachedData = await s3Service.getWhisperCache(videoId);
+        
+        // Apply spaCy improvement to S3 cached results if requested
+        const useSpacy = req.body.useSpacy !== 'false'; // Default to true
+        if (useSpacy && cachedData.sentences && cachedData.sentences.length > 0 && !cachedData.spacyImproved) {
+          console.log('🧠 Applying spaCy improvement to S3 cached Whisper results...');
+          try {
+            cachedData.sentences = await improveSentencesWithSpacy(cachedData.sentences);
+            cachedData.spacyImproved = true;
+            cachedData.source = 's3+spacy';
+            console.log('✅ spaCy improvement applied to S3 cached results');
+          } catch (spacyError) {
+            console.warn('⚠️ spaCy improvement failed for S3 cached results:', spacyError.message);
+          }
+        }
         
         // Save to local cache for faster access next time
         try {
@@ -130,7 +218,7 @@ router.get('/cached/:videoId', async (req, res) => {
         return res.json({
           ...cachedData,
           cached: true,
-          source: 's3',
+          source: cachedData.source || 's3',
           cachedAt: new Date().toISOString()
         });
       }
@@ -170,11 +258,26 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
           fs.unlinkSync(req.file.path);
         }
         
-        const cachedData = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'));
+        let cachedData = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'));
+        
+        // Apply spaCy improvement to cached results if requested
+        const useSpacy = req.body.useSpacy !== 'false'; // Default to true
+        if (useSpacy && cachedData.sentences && cachedData.sentences.length > 0 && !cachedData.spacyImproved) {
+          console.log('🧠 Applying spaCy improvement to cached Whisper results...');
+          try {
+            cachedData.sentences = await improveSentencesWithSpacy(cachedData.sentences);
+            cachedData.spacyImproved = true;
+            cachedData.source = 'local+spacy';
+            console.log('✅ spaCy improvement applied to cached results');
+          } catch (spacyError) {
+            console.warn('⚠️ spaCy improvement failed for cached results:', spacyError.message);
+          }
+        }
+        
         return res.json({
           ...cachedData,
           cached: true,
-          source: 'local',
+          source: cachedData.source || 'local',
           cachedAt: fs.statSync(cacheFilePath).mtime
         });
       }
@@ -307,7 +410,19 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
     }
 
     // Process the transcription to create sentences with precise timing
-    const processedSentences = processSentencesFromWhisper(transcription);
+    let processedSentences = await processSentencesFromWhisper(transcription);
+    
+    // Apply spaCy improvement to Whisper results (default enabled)
+    const useSpacy = req.body.useSpacy !== 'false'; // Default to true unless explicitly disabled
+    if (useSpacy && processedSentences.length > 0) {
+      console.log('🧠 Applying spaCy improvement to Whisper results...');
+      try {
+        processedSentences = await improveSentencesWithSpacy(processedSentences);
+        console.log('✅ spaCy improvement applied to Whisper results');
+      } catch (spacyError) {
+        console.warn('⚠️ spaCy improvement failed for Whisper, using original results:', spacyError.message);
+      }
+    }
 
     const result = {
       success: true,
@@ -317,7 +432,8 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
       sentences: processedSentences,
       duration: transcription.duration,
       cached: false,
-      source: 'new',
+      source: useSpacy ? 'whisper+spacy' : 'whisper',
+      spacyImproved: useSpacy,
       processedAt: new Date().toISOString()
     };
 
@@ -365,124 +481,308 @@ router.post('/transcribe', upload.single('audio'), async (req, res) => {
 });
 
 // Process Whisper segments into sentences with precise timing
-function processSentencesFromWhisper(transcription) {
+async function processSentencesFromWhisper(transcription) {
   if (!transcription.segments) {
     return [];
   }
 
-  const sentences = [];
-  let currentSentence = {
-    text: '',
-    start: 0,
-    end: 0,
-    words: []
-  };
+  // Combine all text
+  let fullText = transcription.segments
+    .map(segment => segment.text.trim())
+    .join(' ');
 
-  transcription.segments.forEach((segment, index) => {
-    const text = segment.text.trim();
-    
-    // Enhanced sentence splitting with multiple punctuation and conjunctions
-    const sentenceParts = text.split(/[.!?]+|(?:\s+(?:and|but|so|however|therefore|meanwhile|furthermore|moreover|additionally)\s+)/i)
-      .filter(part => part.trim().length > 0);
-    
-    if (sentenceParts.length === 1) {
-      // Single sentence or sentence fragment
-      if (currentSentence.text === '') {
-        // Start new sentence
-        currentSentence.text = text;
-        currentSentence.start = segment.start;
-        currentSentence.end = segment.end;
-        currentSentence.words = segment.words || [];
-      } else {
-        // Continue current sentence
-        currentSentence.text += ' ' + text;
-        currentSentence.end = segment.end;
-        if (segment.words) {
-          currentSentence.words = currentSentence.words.concat(segment.words);
-        }
-      }
-      
-      // Check if this segment ends with punctuation or is long enough
-      const shouldEndSentence = /[.!?]$/.test(text) || 
-                                currentSentence.text.split(' ').length >= 15 || // Max 15 words
-                                (currentSentence.end - currentSentence.start) >= 8; // Max 8 seconds
-      
-      if (shouldEndSentence) {
-        sentences.push({
-          text: currentSentence.text.trim(),
-          start: currentSentence.start,
-          end: currentSentence.end,
-          duration: currentSentence.end - currentSentence.start,
-          words: currentSentence.words
-        });
-        
-        // Reset for next sentence
-        currentSentence = { text: '', start: 0, end: 0, words: [] };
-      }
-    } else {
-      // Multiple sentences in this segment
-      sentenceParts.forEach((part, partIndex) => {
-        const partText = part.trim();
-        if (partText.length === 0) return;
-        
-        // Estimate timing for this part of the segment
-        const partStart = segment.start + (partIndex / sentenceParts.length) * (segment.end - segment.start);
-        const partEnd = segment.start + ((partIndex + 1) / sentenceParts.length) * (segment.end - segment.start);
-        
-        if (currentSentence.text === '') {
-          currentSentence.text = partText;
-          currentSentence.start = partStart;
-          currentSentence.end = partEnd;
-        } else {
-          currentSentence.text += ' ' + partText;
-          currentSentence.end = partEnd;
-        }
-        
-        // End of sentence
-        sentences.push({
-          text: currentSentence.text.trim(),
-          start: currentSentence.start,
-          end: currentSentence.end,
-          duration: currentSentence.end - currentSentence.start,
-          words: currentSentence.words
-        });
-        
-        // Reset for next sentence
-        currentSentence = { text: '', start: 0, end: 0, words: [] };
-      });
+  console.log('🔍 DEBUG: Full text length:', fullText.length);
+  console.log('🔍 DEBUG: Full text preview:', fullText.substring(0, 200) + '...');
+  console.log('🔍 DEBUG: Total segments from Whisper:', transcription.segments.length);
+
+  let sentences;
+  
+  // Use spaCy for sentence segmentation if available
+  if (spacyAvailable) {
+    try {
+      sentences = await tokenizeWithSpacy(fullText);
+      console.log('🔄 spaCy sentences found:', sentences.length);
+      console.log('🔍 DEBUG: spaCy sentences preview:', sentences.slice(0, 3));
+    } catch (error) {
+      console.warn('⚠️ spaCy failed, using natural tokenizer:', error.message);
+      sentences = naturalTokenizer.tokenize(fullText);
+      console.log('🔄 Natural tokenizer sentences found:', sentences.length);
+      console.log('🔍 DEBUG: Natural sentences preview:', sentences.slice(0, 3));
     }
-  });
-
-  // Add any remaining sentence
-  if (currentSentence.text.trim().length > 0) {
-    sentences.push({
-      text: currentSentence.text.trim(),
-      start: currentSentence.start,
-      end: currentSentence.end,
-      duration: currentSentence.end - currentSentence.start,
-      words: currentSentence.words
-    });
+  } else {
+    // Fallback to natural tokenizer
+    sentences = naturalTokenizer.tokenize(fullText);
+    console.log('🔄 Natural tokenizer sentences found:', sentences.length);
+    console.log('🔍 DEBUG: Natural sentences preview:', sentences.slice(0, 3));
   }
 
-  // Filter out very short sentences (less than 3 words)
-  const filteredSentences = sentences.filter(sentence => 
-    sentence.text.split(' ').length >= 3 && sentence.duration >= 0.5
-  );
+  let currentPosition = 0;
+  let processedSentences = [];
 
-  console.log('🔄 Processed sentences:', sentences.length, '→ Filtered:', filteredSentences.length);
-  console.log('📊 Average sentence length:', 
-    filteredSentences.reduce((sum, s) => sum + s.text.split(' ').length, 0) / filteredSentences.length || 0, 'words');
-  console.log('⏱️ Average sentence duration:', 
-    filteredSentences.reduce((sum, s) => sum + s.duration, 0) / filteredSentences.length || 0, 'seconds');
+  // Create character position map for segments
+  let segmentPositions = [];
+  let textPosition = 0;
   
-  return filteredSentences;
+  for (const segment of transcription.segments) {
+    const segmentText = segment.text.trim();
+    segmentPositions.push({
+      segment: segment,
+      startChar: textPosition,
+      endChar: textPosition + segmentText.length,
+      text: segmentText
+    });
+    textPosition += segmentText.length + 1; // +1 for space
+  }
+
+  console.log('🔍 DEBUG: Created segment position map for', segmentPositions.length, 'segments');
+
+  for (const sentence of sentences) {
+    const sentenceText = sentence.trim();
+    if (!sentenceText) continue;
+    
+    console.log('🔍 DEBUG: Processing sentence:', sentenceText.substring(0, 50) + '...');
+    
+    // Find sentence position in full text
+    const sentenceStartChar = fullText.indexOf(sentenceText, currentPosition);
+    const sentenceEndChar = sentenceStartChar + sentenceText.length;
+
+    console.log('🔍 DEBUG: Sentence char range:', sentenceStartChar, '-', sentenceEndChar);
+
+    // Find overlapping segments
+    let matchedSegments = [];
+    let sentenceStart = null;
+    let sentenceEnd = null;
+    let sentenceWords = [];
+
+    for (const segPos of segmentPositions) {
+      // Check if this segment overlaps with the sentence
+      const hasOverlap = !(segPos.endChar <= sentenceStartChar || segPos.startChar >= sentenceEndChar);
+      
+      if (hasOverlap) {
+        matchedSegments.push(segPos.segment);
+        
+        if (sentenceStart === null || segPos.segment.start < sentenceStart) {
+          sentenceStart = segPos.segment.start;
+        }
+        if (sentenceEnd === null || segPos.segment.end > sentenceEnd) {
+          sentenceEnd = segPos.segment.end;
+        }
+
+        // Add word information
+        if (segPos.segment.words) {
+          sentenceWords = sentenceWords.concat(segPos.segment.words);
+        }
+      }
+    }
+
+    console.log('🔍 DEBUG: Matched segments for sentence:', matchedSegments.length);
+    console.log('🔍 DEBUG: Sentence timing:', sentenceStart, '-', sentenceEnd);
+
+    // Only add valid sentences
+    if (sentenceStart !== null && sentenceEnd !== null) {
+      const wordCount = sentenceText.split(/\s+/).length;
+      const duration = sentenceEnd - sentenceStart;
+
+      console.log('🔍 DEBUG: Word count:', wordCount, 'Duration:', duration);
+
+      // Apply filtering conditions
+      if (
+        wordCount >= 3 && 
+        duration >= 1.0 &&
+        duration <= 15.0 &&
+        sentenceText.length > 0
+      ) {
+        processedSentences.push({
+          text: sentenceText,
+          start: sentenceStart,
+          end: sentenceEnd,
+          duration: duration,
+          words: sentenceWords,
+          wordCount: wordCount
+        });
+        console.log('✅ DEBUG: Sentence added to final list');
+      } else {
+        console.log('❌ DEBUG: Sentence filtered out - wordCount:', wordCount, 'duration:', duration);
+      }
+    } else {
+      console.log('❌ DEBUG: No timing info found for sentence');
+    }
+
+    // Update position for next sentence search
+    currentPosition = sentenceEndChar;
+  }
+
+  // Debug information
+  console.log('✅ Processed sentences:', processedSentences.length);
+  console.log('📊 Average sentence length:', 
+    Math.round(processedSentences.reduce((sum, s) => sum + s.wordCount, 0) / processedSentences.length || 0),
+    'words');
+  console.log('⏱️ Average sentence duration:', 
+    Math.round(processedSentences.reduce((sum, s) => sum + s.duration, 0) / processedSentences.length || 0),
+    'seconds');
+
+  return processedSentences;
+}
+
+// Helper function to improve sentence boundaries using spaCy (copied from youtube.js)
+async function improveSentencesWithSpacy(sentences) {
+  try {
+    // Combine all subtitle text
+    const fullText = sentences.map(s => s.text).join(' ');
+    
+    // Use spaCy for better sentence segmentation
+    const spacySentences = await new Promise((resolve, reject) => {
+      const python = spawn('python3', ['-c', `
+import spacy
+import sys
+import json
+
+try:
+    nlp = spacy.load('en_core_web_sm')
+    text = sys.stdin.read()
+    doc = nlp(text)
+    sentences = [sent.text.strip() for sent in doc.sents if sent.text.strip()]
+    print(json.dumps(sentences))
+except Exception as e:
+    print(json.dumps({"error": str(e)}), file=sys.stderr)
+    sys.exit(1)
+`]);
+
+      let output = '';
+      let errorOutput = '';
+
+      python.stdout.on('data', (data) => {
+        output += data.toString();
+      });
+
+      python.stderr.on('data', (data) => {
+        errorOutput += data.toString();
+      });
+
+      python.on('close', (code) => {
+        if (code === 0) {
+          try {
+            const sentences = JSON.parse(output.trim());
+            resolve(sentences);
+          } catch (parseError) {
+            reject(new Error(`Failed to parse spaCy output: ${parseError.message}`));
+          }
+        } else {
+          reject(new Error(`spaCy process failed: ${errorOutput}`));
+        }
+      });
+
+      python.stdin.write(fullText);
+      python.stdin.end();
+    });
+
+    console.log(`🔄 spaCy improved sentences: ${sentences.length} → ${spacySentences.length}`);
+
+    // Map spaCy sentences back to timing information
+    const improvedSentences = [];
+    
+    for (const spacySentence of spacySentences) {
+      // Find this sentence in the full text
+      const sentenceStart = fullText.indexOf(spacySentence);
+      const sentenceEnd = sentenceStart + spacySentence.length;
+      
+      console.log(`🔍 Mapping sentence: "${spacySentence.substring(0, 50)}..."`);
+      console.log(`📍 Text position: ${sentenceStart} - ${sentenceEnd}`);
+      
+      // Find overlapping original sentences for timing
+      let earliestStart = null;
+      let latestEnd = null;
+      let matchedOriginals = [];
+      
+      // Build character position map for original sentences
+      let charPosition = 0;
+      for (const originalSentence of sentences) {
+        const origStart = charPosition;
+        const origEnd = charPosition + originalSentence.text.length;
+        
+        // Check if this original sentence overlaps with spaCy sentence
+        const hasOverlap = !(origEnd <= sentenceStart || origStart >= sentenceEnd);
+        
+        if (hasOverlap) {
+          matchedOriginals.push(originalSentence);
+          console.log(`  ✅ Matched: "${originalSentence.text.substring(0, 30)}..." (${originalSentence.start}s - ${originalSentence.end}s)`);
+          
+          if (earliestStart === null || originalSentence.start < earliestStart) {
+            earliestStart = originalSentence.start;
+          }
+          if (latestEnd === null || originalSentence.end > latestEnd) {
+            latestEnd = originalSentence.end;
+          }
+        }
+        
+        charPosition += originalSentence.text.length + 1; // +1 for space separator
+      }
+      
+      console.log(`📊 Found ${matchedOriginals.length} matching segments`);
+      
+      if (earliestStart !== null && latestEnd !== null) {
+        const rawDuration = latestEnd - earliestStart;
+        
+        // Calculate more accurate duration based on text length and speaking rate
+        const wordCount = spacySentence.split(/\s+/).length;
+        const averageSpeakingRate = 2.5; // words per second (normal speaking rate)
+        const estimatedDuration = wordCount / averageSpeakingRate;
+        
+        // Use the shorter of raw duration or estimated duration to prevent overly long playback
+        // But ensure minimum duration for very short sentences
+        const minDuration = Math.max(0.8, wordCount * 0.25); // Reduced from 0.3 to 0.25s per word
+        const maxDuration = Math.min(rawDuration, estimatedDuration + 0.5); // Reduced buffer from 1.0 to 0.5s
+        
+        // For very short sentences (≤5 words), be more conservative
+        let finalDuration;
+        if (wordCount <= 5) {
+          finalDuration = Math.max(minDuration, Math.min(maxDuration, wordCount * 0.4 + 0.5)); // More conservative for short sentences
+        } else {
+          finalDuration = Math.max(minDuration, Math.min(maxDuration, 8.0)); // Cap at 8 seconds for longer sentences
+        }
+        
+        console.log(`📏 Duration calculation for "${spacySentence.substring(0, 30)}...":
+          - Raw duration: ${rawDuration.toFixed(2)}s
+          - Estimated (${wordCount} words): ${estimatedDuration.toFixed(2)}s  
+          - Final duration: ${finalDuration.toFixed(2)}s
+          - Start time: ${earliestStart.toFixed(2)}s
+          - End time: ${(earliestStart + finalDuration).toFixed(2)}s
+          - Matched ${matchedOriginals.length} original segments`);
+        
+        improvedSentences.push({
+          text: spacySentence,
+          start: earliestStart,
+          end: earliestStart + finalDuration, // Use calculated duration
+          duration: finalDuration,
+          wordCount: wordCount,
+          improved: true,
+          originalCount: matchedOriginals.length,
+          rawDuration: rawDuration, // Keep original for reference
+          estimatedDuration: estimatedDuration
+        });
+      } else {
+        console.log(`❌ No timing found for: "${spacySentence.substring(0, 50)}..."`);
+      }
+    }
+
+    console.log(`✅ spaCy sentence improvement completed: ${improvedSentences.length} final sentences`);
+    return improvedSentences;
+
+  } catch (error) {
+    console.warn('⚠️ spaCy sentence improvement failed:', error.message);
+    console.log('📝 Using original YouTube sentences');
+    return sentences;
+  }
 }
 
 // Get YouTube subtitles (fallback) - Updated to use yt-dlp with multiple fallbacks
 router.get('/youtube-subtitles/:videoId', async (req, res) => {
   try {
     const { videoId } = req.params;
+    const { useSpacy = 'true' } = req.query; // Allow disabling spaCy via query param
+    
     console.log('📺 Fetching YouTube subtitles for:', videoId);
+    console.log(`🧠 spaCy enhancement: ${useSpacy === 'true' ? 'enabled' : 'disabled'}`);
 
     // Import the new YouTube captions service
     const { getCaptions } = require('../services/youtube-captions');
@@ -496,18 +796,24 @@ router.get('/youtube-subtitles/:videoId', async (req, res) => {
         console.log(`✅ yt-dlp success: ${captionResult.captions.length} captions`);
         
         // Convert to the format expected by frontend
-        const processedSentences = captionResult.captions.map(caption => ({
+        let processedSentences = captionResult.captions.map(caption => ({
           text: caption.text,
           start: caption.start,
           end: caption.start + caption.dur,
           duration: caption.dur
         }));
         
+        // Apply spaCy improvement if enabled
+        if (useSpacy === 'true') {
+          processedSentences = await improveSentencesWithSpacy(processedSentences);
+        }
+        
         return res.json({
           success: true,
-          source: captionResult.method,
+          source: useSpacy === 'true' ? captionResult.method + '+spacy' : captionResult.method,
           sentences: processedSentences,
           captionCount: captionResult.count,
+          spacyImproved: useSpacy === 'true',
           raw: captionResult.captions
         });
       }

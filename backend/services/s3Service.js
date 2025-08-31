@@ -1,17 +1,29 @@
-const { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, PutBucketCorsCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, PutBucketCorsCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const fs = require('fs');
 const path = require('path');
 
 class S3Service {
   constructor() {
+    // Debug: Log environment variables (without showing sensitive data)
+    console.log('🔍 S3Service Debug:');
+    console.log('  AWS_ACCESS_KEY_ID:', process.env.AWS_ACCESS_KEY_ID ? '✅ Set' : '❌ Missing');
+    console.log('  AWS_SECRET_ACCESS_KEY:', process.env.AWS_SECRET_ACCESS_KEY ? '✅ Set' : '❌ Missing');
+    console.log('  AWS_REGION:', process.env.AWS_REGION || '❌ Not set');
+    console.log('  AWS_S3_BUCKET:', process.env.AWS_S3_BUCKET || '❌ Not set');
+    
     // Credential verification
     if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
       throw new Error('AWS credentials not found in environment variables');
     }
 
+    this.bucketName = process.env.AWS_S3_BUCKET || 'speakflow-audio-files';
+    this.region = process.env.AWS_REGION || 'us-east-1';
+
+    console.log(`S3 Service initialized with bucket: ${this.bucketName} in region: ${this.region}`);
+
     this.s3Client = new S3Client({
-      region: process.env.AWS_REGION || 'us-east-2',
+      region: this.region,
       credentials: {
         accessKeyId: process.env.AWS_ACCESS_KEY_ID.trim(),
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY.trim(),
@@ -22,9 +34,6 @@ class S3Service {
         metadata: { handlerProtocol: "https/1.1" }
       }
     });
-    
-    this.bucketName = process.env.AWS_S3_BUCKET || 'speakflow-audio-files';
-    console.log(`S3 Service initialized with bucket: ${this.bucketName} in region: ${process.env.AWS_REGION || 'us-east-2'}`);
   }
 
   /**
@@ -256,6 +265,85 @@ class S3Service {
       console.error('S3 whisper cache upload error:', error);
       throw new Error(`Failed to upload whisper cache to S3: ${error.message}`);
     }
+  }
+
+  /**
+   * Delete audio file from S3
+   * @param {string} videoId - YouTube video ID
+   * @returns {Promise<boolean>} Success status
+   */
+  async deleteAudioFile(videoId) {
+    try {
+      const fileName = `audio/${videoId}.mp3`;
+      
+      const deleteParams = {
+        Bucket: this.bucketName,
+        Key: fileName,
+      };
+
+      const command = new DeleteObjectCommand(deleteParams);
+      await this.s3Client.send(command);
+      
+      console.log(`Audio file deleted from S3: ${fileName}`);
+      return true;
+    } catch (error) {
+      console.error('S3 audio file delete error:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Delete whisper cache from S3
+   * @param {string} videoId - YouTube video ID
+   * @returns {Promise<boolean>} Success status
+   */
+  async deleteWhisperCache(videoId) {
+    try {
+      const fileName = `cache/whisper/${videoId}.json`;
+      
+      const deleteParams = {
+        Bucket: this.bucketName,
+        Key: fileName,
+      };
+
+      const command = new DeleteObjectCommand(deleteParams);
+      await this.s3Client.send(command);
+      
+      console.log(`Whisper cache deleted from S3: ${fileName}`);
+      return true;
+    } catch (error) {
+      console.error('S3 whisper cache delete error:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Delete all cached data for a video (audio + whisper cache)
+   * @param {string} videoId - YouTube video ID
+   * @returns {Promise<{audioDeleted: boolean, whisperDeleted: boolean}>}
+   */
+  async deleteVideoCache(videoId) {
+    const results = {
+      audioDeleted: false,
+      whisperDeleted: false
+    };
+
+    try {
+      // Delete audio file
+      results.audioDeleted = await this.deleteAudioFile(videoId);
+    } catch (error) {
+      console.error(`Failed to delete audio for ${videoId}:`, error);
+    }
+
+    try {
+      // Delete whisper cache
+      results.whisperDeleted = await this.deleteWhisperCache(videoId);
+    } catch (error) {
+      console.error(`Failed to delete whisper cache for ${videoId}:`, error);
+    }
+
+    console.log(`Cache deletion for ${videoId}:`, results);
+    return results;
   }
 }
 
