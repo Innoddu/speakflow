@@ -14,6 +14,17 @@ const natural = require('natural');
 // Initialize sentence tokenizer (fallback)
 const naturalTokenizer = new natural.SentenceTokenizer();
 
+// Add cleanup function for memory optimization
+function cleanupMemory() {
+  // Force garbage collection if available
+  if (global.gc) {
+    global.gc();
+  }
+  
+  // Clear require cache for Python subprocess modules
+  delete require.cache[require.resolve('child_process')];
+}
+
 // Test spaCy availability
 let spacyAvailable = false;
 (async () => {
@@ -46,6 +57,11 @@ try:
     doc = nlp(text)
     sentences = [sent.text.strip() for sent in doc.sents if sent.text.strip()]
     print(json.dumps(sentences))
+    
+    # Cleanup
+    del nlp
+    del doc
+    del sentences
 except Exception as e:
     print(json.dumps({"error": str(e)}), file=sys.stderr)
     sys.exit(1)
@@ -63,6 +79,12 @@ except Exception as e:
     });
 
     python.on('close', (code) => {
+      // Ensure process is cleaned up
+      python.kill();
+      
+      // Call cleanup function
+      setTimeout(cleanupMemory, 100);
+      
       if (code === 0) {
         try {
           const sentences = JSON.parse(output.trim());
@@ -75,8 +97,23 @@ except Exception as e:
       }
     });
 
+    python.on('error', (error) => {
+      python.kill();
+      cleanupMemory();
+      reject(error);
+    });
+
     python.stdin.write(text);
     python.stdin.end();
+    
+    // Set timeout to prevent hanging
+    setTimeout(() => {
+      if (!python.killed) {
+        python.kill('SIGKILL');
+        cleanupMemory();
+        reject(new Error('Python process timeout'));
+      }
+    }, 30000); // 30 second timeout
   });
 }
 
@@ -643,6 +680,11 @@ try:
     doc = nlp(text)
     sentences = [sent.text.strip() for sent in doc.sents if sent.text.strip()]
     print(json.dumps(sentences))
+    
+    # Cleanup
+    del nlp
+    del doc
+    del sentences
 except Exception as e:
     print(json.dumps({"error": str(e)}), file=sys.stderr)
     sys.exit(1)
@@ -660,6 +702,12 @@ except Exception as e:
       });
 
       python.on('close', (code) => {
+        // Ensure process is cleaned up
+        python.kill();
+        
+        // Call cleanup function
+        setTimeout(cleanupMemory, 100);
+        
         if (code === 0) {
           try {
             const sentences = JSON.parse(output.trim());
@@ -672,8 +720,23 @@ except Exception as e:
         }
       });
 
+      python.on('error', (error) => {
+        python.kill();
+        cleanupMemory();
+        reject(error);
+      });
+
       python.stdin.write(fullText);
       python.stdin.end();
+      
+      // Set timeout to prevent hanging
+      setTimeout(() => {
+        if (!python.killed) {
+          python.kill('SIGKILL');
+          cleanupMemory();
+          reject(new Error('Python process timeout'));
+        }
+      }, 30000); // 30 second timeout
     });
 
     console.log(`🔄 spaCy improved sentences: ${sentences.length} → ${spacySentences.length}`);
