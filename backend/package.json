@@ -5,8 +5,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon --ignore 'cache/*' --ignore 'data/*' --ignore 'public/*' server.js",
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "postinstall": "python3 -m pip install --break-system-packages spacy && python3 -m spacy download en_core_web_sm"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
