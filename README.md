@@ -1,83 +1,66 @@
-# SpeakFlow - English Speaking Practice App
+# 🎯 SpeakFlow Backend API
 
-SpeakFlow is a comprehensive mobile and web application designed to help users improve their English speaking skills by searching YouTube videos, generating accurate transcripts using AI, and practicing speaking with advanced features.
+> **AI-powered English learning platform - Backend API Server**
 
-## ✨ Features
+## 🚀 **Overview**
 
-- 🎯 **YouTube Video Search**: Search for English videos on any topic
-- 🤖 **AI-Powered Transcription**: Advanced transcript generation using Whisper AI and spaCy
-- 📝 **Smart Sentence Segmentation**: Accurate sentence splitting with spaCy NLP
-- 🗣️ **Script Practice**: Practice speaking with sentence-by-sentence breakdown
-- 🔊 **Dual Audio Modes**: Original audio and Text-to-Speech options
-- 🎵 **Precise Audio Control**: Click any sentence to play exact audio segment
-- 📊 **Progress Tracking**: Visual progress through scripts with auto-scroll
-- ☁️ **Cloud Storage**: AWS S3 integration for audio caching
-- 🚀 **Auto Play Mode**: Continuous sentence playback for immersive practice
-- 📱 **Cross-Platform**: Works on iOS, Android, and Web
+SpeakFlow Backend provides the core API services for the SpeakFlow English learning platform, featuring:
 
-## 🏗️ Project Structure
+- 🎤 **Whisper AI Transcription** - Convert YouTube audio to text with precise timing
+- 🧠 **spaCy NLP Integration** - Smart English sentence segmentation  
+- 🔊 **OpenAI TTS** - High-quality text-to-speech generation
+- 📚 **YouTube Integration** - Fetch video details and captions
+- ☁️ **AWS S3 Storage** - Scalable audio file management
+- 📊 **Practice History** - User progress tracking
+
+---
+
+## 🏗️ **Project Structure**
 
 ```
-speakflow/
-├── backend/                    # Node.js Express server
-│   ├── routes/
-│   │   ├── auth.js            # Authentication routes
-│   │   ├── whisper.js         # Whisper AI transcription
-│   │   ├── youtube.js         # YouTube API & captions
-│   │   ├── tts.js             # Text-to-Speech services
-│   │   ├── translate.js       # Translation services
-│   │   └── history.js         # Practice history
-│   ├── services/
-│   │   ├── s3Service.js       # AWS S3 integration
-│   │   └── youtube-captions.js # Caption extraction
-│   ├── scripts/               # Utility scripts
-│   ├── server.js              # Main server file
-│   ├── package.json           # Backend dependencies
-│   └── .env.example           # Environment variables template
-├── mobile/                     # React Native Expo app
-│   ├── src/
-│   │   ├── screens/           # App screens
-│   │   │   ├── HomeScreen.tsx
-│   │   │   ├── SearchScreen.tsx
-│   │   │   ├── VideoDetailScreen.tsx
-│   │   │   ├── ScriptPracticeScreen.tsx
-│   │   │   └── HistoryScreen.tsx
-│   │   ├── components/        # Reusable components
-│   │   │   ├── AudioPlayer.tsx
-│   │   │   ├── VideoPlayer.tsx
-│   │   │   ├── VoiceSelector.tsx
-│   │   │   └── WebAlert.tsx
-│   │   ├── services/          # API services
-│   │   │   ├── youtubeService.ts
-│   │   │   ├── whisperService.ts
-│   │   │   ├── ttsService.ts
-│   │   │   └── historyService.ts
-│   │   └── config/
-│   │       └── api.ts         # API configuration
-│   ├── App.tsx                # Main app component
-│   ├── app.json               # Expo configuration
-│   ├── eas.json               # Expo Application Services
-│   └── package.json           # Mobile dependencies
-├── Dockerfile                 # Docker configuration
-├── railway.toml               # Railway deployment config
-├── netlify.toml               # Netlify deployment config
-├── nixpacks.toml              # Nixpacks build config
-└── README.md                  # This file
+speakflow-backend/
+├── backend/
+│   ├── routes/           # API endpoints
+│   │   ├── auth.js       # Authentication
+│   │   ├── whisper.js    # AI transcription  
+│   │   ├── tts.js        # Text-to-speech
+│   │   ├── youtube.js    # YouTube integration
+│   │   ├── translate.js  # Translation services
+│   │   └── history.js    # User history
+│   ├── services/         # Business logic
+│   │   ├── s3Service.js  # AWS S3 integration
+│   │   └── youtube-captions.js
+│   ├── scripts/          # Utility scripts
+│   ├── cache/           # Local cache storage
+│   ├── uploads/         # Temporary uploads
+│   └── server.js        # Main server entry
+├── Dockerfile           # Container configuration
+├── nixpacks.toml       # Render deployment config
+└── package.json        # Dependencies
 ```
+
+---
+
+## 🌐 **Frontend Applications**
+
+The SpeakFlow frontend applications are maintained in separate repositories:
+
+- **🚀 Frontend Repository**: [speakflow-frontend](https://github.com/Innoddu/speakflow-frontend)
+- **📱 Mobile App**: React Native with Expo
+- **💻 Web App**: Expo Web deployment
+
+---
 
 ## 🛠️ Prerequisites
 
 - Node.js (v20 or higher)
 - Python 3.8+ with spaCy and English model
 - npm or yarn
-- Expo CLI (for mobile development)
 - YouTube Data API v3 key
 - OpenAI API key (for Whisper AI)
 - AWS S3 credentials (for audio caching)
 
-## ⚙️ Setup Instructions
-
-### 1. Backend Setup
+## ⚙️ Backend Setup
 
 1. Navigate to the backend directory:
    ```bash
@@ -124,59 +107,27 @@ speakflow/
    npm start
    ```
 
-### 2. Mobile App Setup
+## 🔑 API Keys Setup
 
-1. Navigate to the mobile directory:
-   ```bash
-   cd mobile
-   ```
-
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-
-3. Install Expo modules:
-   ```bash
-   npx expo install expo-speech expo-av expo-linear-gradient expo-file-system
-   ```
-
-4. Update API configuration in `src/config/api.ts`:
-   ```typescript
-   export const API_CONFIG = {
-     BASE_URL: 'http://your-backend-url:5030/api',
-     TIMEOUT: 30000,
-   };
-   ```
-
-5. Start the mobile app:
-   ```bash
-   npx expo start
-   ```
-
-### 3. API Keys Setup
-
-#### YouTube Data API v3
+### YouTube Data API v3
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
 2. Create a new project or select existing one
 3. Enable YouTube Data API v3
 4. Create API Key credentials
 5. Add the key to your `.env` file
 
-#### OpenAI API (Whisper)
+### OpenAI API (Whisper)
 1. Visit [OpenAI Platform](https://platform.openai.com/)
 2. Create an account and get API key
 3. Add to `.env` file
 
-#### AWS S3 Setup
+### AWS S3 Setup
 1. Create AWS account and S3 bucket
 2. Configure bucket permissions for public read access
 3. Create IAM user with S3 permissions
 4. Add credentials to `.env` file
 
-## 🚀 Deployment
-
-### Backend Deployment (Render)
+## 🚀 Deployment (Render)
 
 1. Connect your GitHub repository to Render
 2. Create new Web Service
@@ -187,36 +138,16 @@ speakflow/
 4. Add environment variables in Render dashboard
 5. Deploy!
 
-### Mobile App Deployment (Expo EAS)
+## 📱 API Usage
 
-1. Install EAS CLI:
-   ```bash
-   npm install -g @expo/eas-cli
-   ```
+The SpeakFlow Backend provides RESTful APIs for:
 
-2. Login to Expo:
-   ```bash
-   eas login
-   ```
-
-3. Build for production:
-   ```bash
-   eas build --platform all
-   ```
-
-4. Submit to app stores:
-   ```bash
-   eas submit --platform all
-   ```
-
-## 📱 Usage
-
-1. **Search Videos**: Find English YouTube videos by topic
-2. **Select Video**: Choose from search results
-3. **Choose Mode**: Select Auto, Play, TTS, or Original mode
-4. **Practice**: Click sentences to hear precise audio segments
-5. **Track Progress**: Visual progress bar and sentence highlighting
-6. **Review History**: Access previously practiced videos
+1. **YouTube Integration**: Search videos, get details, and extract captions
+2. **AI Transcription**: Convert audio to text with precise timing using Whisper AI
+3. **Smart Processing**: Enhanced sentence segmentation with spaCy NLP
+4. **TTS Generation**: Convert text to speech with multiple voice options
+5. **History Tracking**: Store and retrieve user practice sessions
+6. **Audio Management**: Efficient caching and delivery via AWS S3
 
 ## 🔌 API Endpoints
 
@@ -266,17 +197,11 @@ speakflow/
 - Comprehensive error handling and logging
 - Docker support for containerized deployment
 
-### Frontend Architecture
-- React Native with Expo for cross-platform support
-- TypeScript for type safety
-- Modern UI with gesture support
-- Responsive design for various screen sizes
-
 ### Key Technologies
 - **Backend**: Node.js, Express, Python, spaCy, Whisper AI
-- **Frontend**: React Native, Expo, TypeScript
-- **Cloud**: AWS S3, Render, Expo EAS
-- **APIs**: YouTube Data API v3, OpenAI Whisper
+- **Cloud**: AWS S3, Render
+- **APIs**: YouTube Data API v3, OpenAI Whisper, OpenAI TTS
+- **AI/ML**: spaCy NLP, OpenAI Whisper transcription
 
 ## 🐛 Troubleshooting
 
