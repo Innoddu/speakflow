@@ -44,9 +44,6 @@ app.listen(port, HOST, () => {
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`📺 YouTube API Key: ${process.env.YOUTUBE_API_KEY ? '✅ Configured' : '❌ Missing'}`);
   console.log(`✨ Gemini API Key: ${process.env.GEMINI_API_KEY ? '✅ Configured' : '❌ Missing'}`);
-  console.log(`☁️ AWS Access Key: ${process.env.AWS_ACCESS_KEY_ID ? '✅ Configured' : '❌ Missing'}`);
-  console.log(`🗄️ AWS S3 Bucket: ${process.env.AWS_S3_BUCKET || 'Not configured'}`);
-  console.log(`🌎 AWS Region: ${process.env.AWS_REGION || 'Not configured'}`);
   console.log(`🔗 Health check: http://${HOST}:${port}/api/health`);
   console.log(`⏰ Server started at ${new Date().toISOString()}`);
 }).on('error', (err) => {

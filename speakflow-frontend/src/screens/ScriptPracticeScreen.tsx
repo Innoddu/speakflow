@@ -18,12 +18,10 @@ import {
 import { useRoute } from '@react-navigation/native';
 import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../../App';
-import { PracticeSentence, getAudioUrl, AudioInfo, getVideoDetails } from '../services/youtubeService';
-import { Audio } from 'expo-av';
+import { PracticeSentence, getVideoDetails } from '../services/youtubeService';
 import VideoPlayer, { VideoPlayerRef } from '../components/VideoPlayer';
-import AudioPlayer, { AudioPlayerRef } from '../components/AudioPlayer';
 import { getTranscriptData, ProcessedSentence, testConnection } from '../services/whisperService';
-import { addToHistory, updateAudioStatus } from '../services/historyService';
+import { addToHistory } from '../services/historyService';
 import { API_CONFIG } from '../config/api';
 
 type ScriptPracticeScreenRouteProp = RouteProp<RootStackParamList, 'ScriptPractice'>;
@@ -46,8 +44,6 @@ export default function ScriptPracticeScreen() {
   const [currentSentenceIndex, setCurrentSentenceIndex] = useState(0);
   const [loading, setLoading] = useState(true);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [audioInfo, setAudioInfo] = useState<AudioInfo | null>(null);
-  const [audioLoading, setAudioLoading] = useState(true);
   const [showVideo, setShowVideo] = useState(true);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
   const [sentenceLayouts, setSentenceLayouts] = useState<{ [key: number]: number }>({});
@@ -58,7 +54,6 @@ export default function ScriptPracticeScreen() {
   const [keywords, setKeywords] = useState<{ [key: number]: KeywordItem[] }>({});
 
   const videoPlayerRef = useRef<VideoPlayerRef>(null);
-  const audioPlayerRef = useRef<AudioPlayerRef>(null);
   const scrollViewRef = useRef<ScrollView>(null);
   const sentenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const videoHeightAnim = useRef(new Animated.Value(1)).current;
@@ -69,9 +64,7 @@ export default function ScriptPracticeScreen() {
 
   useEffect(() => {
     testNetworkConnection();
-    configureAudioSession();
     loadTranscript();
-    loadAudio();
     addVideoToHistory();
 
     return () => {
@@ -90,22 +83,6 @@ export default function ScriptPracticeScreen() {
       }
     } catch (error) {
       console.error('🔬 Connection test error:', error);
-    }
-  };
-
-  const configureAudioSession = async () => {
-    try {
-      if (Platform.OS === 'ios') {
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          staysActiveInBackground: false,
-          playsInSilentModeIOS: true,
-          shouldDuckAndroid: true,
-          playThroughEarpieceAndroid: false,
-        });
-      }
-    } catch (error) {
-      console.error('❌ Failed to configure audio session:', error);
     }
   };
 
@@ -163,20 +140,6 @@ export default function ScriptPracticeScreen() {
     }
   };
 
-  const loadAudio = async () => {
-    try {
-      setAudioLoading(true);
-      const audio = await getAudioUrl(videoId);
-      setAudioInfo(audio);
-      await updateAudioStatus(videoId, true, audio.source);
-    } catch (error) {
-      console.error('❌ Failed to load audio:', error);
-      setAudioInfo(null);
-    } finally {
-      setAudioLoading(false);
-    }
-  };
-
   const scrollToCurrentSentence = (index: number) => {
     if (scrollViewRef.current) {
       const scrollPosition = sentenceLayouts[index] || index * 120;
@@ -185,7 +148,7 @@ export default function ScriptPracticeScreen() {
   };
 
   const stopPlayback = () => {
-    if (audioPlayerRef.current) audioPlayerRef.current.pause();
+    if (videoPlayerRef.current) videoPlayerRef.current.pause();
     if (sentenceTimerRef.current) {
       clearTimeout(sentenceTimerRef.current);
       sentenceTimerRef.current = null;
@@ -193,17 +156,17 @@ export default function ScriptPracticeScreen() {
     setIsPlaying(false);
   };
 
-  // 해당 문장 구간의 원본 영상 오디오를 재생한다.
+  // 해당 문장 구간을 YouTube 임베드 플레이어로 재생한다.
   const playSentence = (sentence: PracticeSentence) => {
-    if (!audioPlayerRef.current) return;
+    if (!videoPlayerRef.current) return;
 
     setIsPlaying(true);
-    audioPlayerRef.current.seekTo(sentence.start);
-    audioPlayerRef.current.play();
+    videoPlayerRef.current.seekTo(sentence.start);
+    videoPlayerRef.current.play();
 
     const paddingMs = 250;
     sentenceTimerRef.current = setTimeout(() => {
-      audioPlayerRef.current?.pause();
+      videoPlayerRef.current?.pause();
       setIsPlaying(false);
     }, sentence.duration * 1000 + paddingMs);
   };
@@ -217,12 +180,6 @@ export default function ScriptPracticeScreen() {
 
     setCurrentSentenceIndex(index);
     scrollToCurrentSentence(index);
-
-    if (!audioInfo) {
-      Alert.alert('오디오 없음', '오디오를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
-      return;
-    }
-
     playSentence(sentences[index]);
   };
 
@@ -326,19 +283,6 @@ export default function ScriptPracticeScreen() {
       >
         <VideoPlayer videoId={videoId} ref={videoPlayerRef} />
       </Animated.View>
-
-      {audioLoading ? (
-        <View style={styles.audioLoadingContainer}>
-          <ActivityIndicator size="small" color="#667eea" />
-          <Text style={styles.audioLoadingText}>Loading audio...</Text>
-        </View>
-      ) : audioInfo ? (
-        <AudioPlayer audioUrl={audioInfo.audioUrl} ref={audioPlayerRef} />
-      ) : (
-        <View style={styles.audioErrorContainer}>
-          <Text style={styles.audioErrorText}>📹 오디오를 불러오지 못했습니다</Text>
-        </View>
-      )}
 
       <ScrollView ref={scrollViewRef} style={styles.scriptContainer} showsVerticalScrollIndicator={false}>
         {sentences.map((sentence, index) => {
@@ -620,34 +564,5 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: '#667eea',
     borderRadius: 2,
-  },
-  audioLoadingContainer: {
-    height: 50,
-    backgroundColor: '#f0f0f0',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderRadius: 8,
-    margin: 8,
-    flexDirection: 'row',
-  },
-  audioLoadingText: {
-    marginLeft: 8,
-    fontSize: 14,
-    color: '#666',
-  },
-  audioErrorContainer: {
-    height: 50,
-    backgroundColor: '#ffe6e6',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderRadius: 8,
-    margin: 8,
-    borderWidth: 1,
-    borderColor: '#ffcccc',
-  },
-  audioErrorText: {
-    fontSize: 14,
-    color: '#cc6666',
-    fontStyle: 'italic',
   },
 });

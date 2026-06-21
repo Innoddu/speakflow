@@ -31,20 +31,6 @@ export interface PracticeSentence {
   correctedWords?: string; // AI-corrected words for comparison
 }
 
-export interface AudioInfo {
-  audioUrl: string;
-  duration: string;
-  title: string;
-  format: {
-    bitrate: string;
-    codec: string;
-    container: string;
-  };
-  fileSize?: string | number;
-  cached?: boolean;
-  source?: 'local' | 's3' | 'stream';
-}
-
 // Create axios instance with configuration
 const apiClient = axios.create({
   baseURL: API_CONFIG.BASE_URL,
@@ -78,20 +64,4 @@ export const getVideoDetails = async (videoId: string): Promise<VideoDetails> =>
   }
 };
 
-// Get audio URL for a video
-export const getAudioUrl = async (videoId: string): Promise<AudioInfo> => {
-  try {
-    const response = await apiClient.get(`/youtube/audio/${videoId}`);
-    const audioInfo = response.data;
-    
-    // If the audioUrl is a relative path, make it absolute
-    if (audioInfo.audioUrl.startsWith('/audio/')) {
-      audioInfo.audioUrl = `${API_CONFIG.BASE_URL}${audioInfo.audioUrl}`;
-    }
-    
-    return audioInfo;
-  } catch (error) {
-    console.error('Error getting audio URL:', error);
-    throw new Error('Failed to get audio URL');
-  }
-}; 
+ 

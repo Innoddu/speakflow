@@ -1,4 +1,4 @@
-import React, { useRef, forwardRef, useImperativeHandle, useState, useEffect } from 'react';
+import React, { useRef, forwardRef, useImperativeHandle, useEffect } from 'react';
 import { View, StyleSheet, Platform } from 'react-native';
 import { WebView } from 'react-native-webview';
 
@@ -13,210 +13,144 @@ export type VideoPlayerRef = {
   getCurrentTime: (callback: (time: number) => void) => void;
 };
 
-// Web component using iframe
+// ── 웹: YouTube IFrame Player API (프로그램 제어 가능) ───────────────
 const WebVideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) => {
-  const [currentTime, setCurrentTime] = useState(0);
-  const [startTime, setStartTime] = useState(0);
-  const [key, setKey] = useState(0);
+  const playerRef = useRef<any>(null);
+  const elemId = useRef(`yt-player-${Math.random().toString(36).slice(2)}`).current;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const createPlayer = () => {
+      const YT = (window as any).YT;
+      if (cancelled || !YT?.Player || !document.getElementById(elemId)) return;
+      playerRef.current = new YT.Player(elemId, {
+        videoId,
+        playerVars: { autoplay: 0, controls: 1, rel: 0, modestbranding: 1, playsinline: 1 },
+      });
+    };
+
+    if ((window as any).YT?.Player) {
+      createPlayer();
+    } else {
+      if (!document.getElementById('yt-iframe-api')) {
+        const tag = document.createElement('script');
+        tag.id = 'yt-iframe-api';
+        tag.src = 'https://www.youtube.com/iframe_api';
+        document.body.appendChild(tag);
+      }
+      const prev = (window as any).onYouTubeIframeAPIReady;
+      (window as any).onYouTubeIframeAPIReady = () => {
+        if (typeof prev === 'function') prev();
+        createPlayer();
+      };
+    }
+
+    return () => {
+      cancelled = true;
+      try {
+        playerRef.current?.destroy?.();
+      } catch {}
+      playerRef.current = null;
+    };
+  }, [videoId, elemId]);
 
   useImperativeHandle(ref, () => ({
-    seekTo: (timeInSeconds: number) => {
-      console.log(`WebVideoPlayer: Seeking to ${timeInSeconds}s`);
-      setStartTime(Math.floor(timeInSeconds));
-      setKey(prev => prev + 1); // Force iframe reload
+    seekTo: (t: number) => {
+      try {
+        playerRef.current?.seekTo?.(Math.max(0, t), true);
+      } catch {}
     },
     play: () => {
-      console.log('📹 WebVideoPlayer: Play command (iframe limitation)');
-      // Note: iframe doesn't allow programmatic play/pause
+      try {
+        playerRef.current?.playVideo?.();
+      } catch {}
     },
     pause: () => {
-      console.log('📹 WebVideoPlayer: Pause command (iframe limitation)');
-      // Note: iframe doesn't allow programmatic play/pause
+      try {
+        playerRef.current?.pauseVideo?.();
+      } catch {}
     },
-    getCurrentTime: (callback: (time: number) => void) => {
-      callback(currentTime);
+    getCurrentTime: (cb: (time: number) => void) => {
+      try {
+        cb(playerRef.current?.getCurrentTime?.() ?? 0);
+      } catch {
+        cb(0);
+      }
     },
   }));
-
-  const embedUrl = `https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=0&start=${startTime}&controls=1&rel=0&showinfo=0&modestbranding=1`;
 
   if (Platform.OS === 'web') {
     return (
       <View style={styles.container}>
-        <iframe
-          key={key}
-          src={embedUrl}
-          style={{
-            width: '100%',
-            height: '100%',
-            border: 'none',
-            backgroundColor: '#000',
-          }}
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-          allowFullScreen
-        />
+        {/* YT.Player가 이 div를 iframe으로 교체 */}
+        {/* @ts-ignore - 웹 전용 DOM 엘리먼트 */}
+        <div id={elemId} style={{ width: '100%', height: '100%' }} />
       </View>
     );
   }
-
-  // Fallback for unsupported platforms
   return <View style={styles.container} />;
 });
 
-// Native component using WebView
+// ── 네이티브: WebView + YouTube IFrame API (injectJavaScript 제어) ───
 const NativeVideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) => {
   const webViewRef = useRef<WebView>(null);
-  const [currentUrl, setCurrentUrl] = useState(`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=0`);
-  const [key, setKey] = useState(0);
-  const [currentTime, setCurrentTime] = useState(0);
 
-  const injectJavaScript = (code: string) => {
-    if (webViewRef.current) {
-      webViewRef.current.postMessage(code);
-    }
+  const run = (js: string) => {
+    webViewRef.current?.injectJavaScript(js + '; true;');
   };
 
   useImperativeHandle(ref, () => ({
-    seekTo: (timeInSeconds: number) => {
-      const startTime = Math.floor(timeInSeconds);
-      const embedUrl = `https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=0&start=${startTime}`;
-      
-      console.log(`VideoPlayer: Seeking to ${startTime}s with embed URL`);
-      
-      setCurrentUrl(embedUrl);
-      setKey(prev => prev + 1);
-    },
-    play: () => {
-      console.log('📹 VideoPlayer: Play command');
-      injectJavaScript('PLAY');
-    },
-    pause: () => {
-      console.log('📹 VideoPlayer: Pause command');
-      injectJavaScript('PAUSE');
-    },
-    getCurrentTime: (callback: (time: number) => void) => {
-      callback(currentTime);
-    },
+    seekTo: (t: number) => run(`if(window.player&&player.seekTo){player.seekTo(${Math.max(0, Math.floor(t))}, true);}`),
+    play: () => run('if(window.player&&player.playVideo){player.playVideo();}'),
+    pause: () => run('if(window.player&&player.pauseVideo){player.pauseVideo();}'),
+    getCurrentTime: (cb: (time: number) => void) => cb(0),
   }));
 
-  const onMessage = (event: any) => {
-    const message = event.nativeEvent.data;
-    
-    if (message.startsWith('TIME:')) {
-      const time = parseFloat(message.replace('TIME:', ''));
-      setCurrentTime(time);
-    }
-  };
-
-  const generateHTML = () => {
-    const startTime = currentUrl.includes('start=') 
-      ? currentUrl.split('start=')[1].split('&')[0] 
-      : '0';
-    
-    return `
+  const html = `
     <!DOCTYPE html>
     <html>
-    <head>
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <style>
-        body { margin: 0; padding: 0; background: black; }
-        #player { width: 100%; height: 100vh; }
-      </style>
-    </head>
+    <head><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>body{margin:0;padding:0;background:#000;}#player{width:100%;height:100vh;}</style></head>
     <body>
       <div id="player"></div>
       <script>
         var tag = document.createElement('script');
         tag.src = "https://www.youtube.com/iframe_api";
-        var firstScriptTag = document.getElementsByTagName('script')[0];
-        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-        
-        var player;
+        document.body.appendChild(tag);
         function onYouTubeIframeAPIReady() {
-          player = new YT.Player('player', {
-            height: '100%',
-            width: '100%',
+          window.player = new YT.Player('player', {
             videoId: '${videoId}',
-            playerVars: {
-               'autoplay': 0,
-               'start': ${startTime},
-               'controls': 1,
-               'rel': 0,
-               'showinfo': 0,
-               'modestbranding': 1
-             },
-            events: {
-              'onReady': onPlayerReady,
-              'onStateChange': onPlayerStateChange
-            }
+            playerVars: { autoplay: 0, controls: 1, rel: 0, modestbranding: 1, playsinline: 1 }
           });
         }
-        
-        function onPlayerReady(event) {
-           setInterval(function() {
-             if (player && player.getCurrentTime) {
-               var currentTime = player.getCurrentTime();
-               window.ReactNativeWebView.postMessage('TIME:' + currentTime);
-             }
-           }, 1000);
-         }
-         
-         function onPlayerStateChange(event) {
-           // Player state change
-         }
-        
-        document.addEventListener('message', function(event) {
-           var command = event.data;
-           
-           if (command === 'PLAY' && player) {
-             player.playVideo();
-           } else if (command === 'PAUSE' && player) {
-             player.pauseVideo();
-           }
-         });
-         
-        window.addEventListener('message', function(event) {
-           var command = event.data;
-           
-           if (command === 'PLAY' && player) {
-             player.playVideo();
-           } else if (command === 'PAUSE' && player) {
-             player.pauseVideo();
-           }
-         });
       </script>
     </body>
-    </html>
-    `;
-  };
+    </html>`;
 
   return (
     <View style={styles.container}>
       <WebView
-        key={key}
         ref={webViewRef}
         style={styles.webview}
-        javaScriptEnabled={true}
-        domStorageEnabled={true}
-        source={{ html: generateHTML() }}
+        javaScriptEnabled
+        domStorageEnabled
+        source={{ html }}
         allowsFullscreenVideo
         allowsInlineMediaPlayback
         mediaPlaybackRequiresUserAction={false}
-        startInLoadingState={true}
-        onMessage={onMessage}
         originWhitelist={['*']}
       />
     </View>
   );
 });
 
-// Main component that chooses between web and native
 const VideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) => {
-  if (Platform.OS === 'web') {
-    return <WebVideoPlayer ref={ref} videoId={videoId} />;
-  } else {
-    return <NativeVideoPlayer ref={ref} videoId={videoId} />;
-  }
+  return Platform.OS === 'web' ? (
+    <WebVideoPlayer ref={ref} videoId={videoId} />
+  ) : (
+    <NativeVideoPlayer ref={ref} videoId={videoId} />
+  );
 });
 
 VideoPlayer.displayName = 'VideoPlayer';

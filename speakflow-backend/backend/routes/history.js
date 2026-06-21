@@ -1,7 +1,6 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const s3Service = require('../services/s3Service');
 
 const router = express.Router();
 
@@ -191,60 +190,21 @@ router.delete('/:videoId', async (req, res) => {
     console.log(`🗑️ History: Deleted video ${videoId} from history`);
     
     let cacheResults = null;
-    
-    // Delete cache files if requested
+
+    // 로컬 전사 캐시 삭제 (요청 시)
     if (deleteCache === 'true') {
-      console.log(`🧹 Starting cache cleanup for video ${videoId}...`);
-      
       try {
-        // Delete local whisper cache
-        const whisperCacheDir = path.join(__dirname, '..', 'cache', 'whisper');
-        const localCachePath = path.join(whisperCacheDir, `${videoId}.json`);
-        let localCacheDeleted = false;
-        
-        if (fs.existsSync(localCachePath)) {
-          fs.unlinkSync(localCachePath);
-          localCacheDeleted = true;
-          console.log(`🗑️ Local whisper cache deleted: ${videoId}`);
+        const transcriptCache = path.join(__dirname, '..', 'data', 'transcripts', `${videoId}.json`);
+        let deleted = false;
+        if (fs.existsSync(transcriptCache)) {
+          fs.unlinkSync(transcriptCache);
+          deleted = true;
+          console.log(`🗑️ Transcript cache deleted: ${videoId}`);
         }
-        
-        // Delete local audio file
-        const audioDir = path.join(__dirname, '..', 'uploads');
-        const localAudioPath = path.join(audioDir, `${videoId}.mp3`);
-        let localAudioDeleted = false;
-        
-        if (fs.existsSync(localAudioPath)) {
-          fs.unlinkSync(localAudioPath);
-          localAudioDeleted = true;
-          console.log(`🗑️ Local audio file deleted: ${videoId}`);
-        }
-        
-        // Delete S3 cache
-        const s3Results = await s3Service.deleteVideoCache(videoId);
-        
-        cacheResults = {
-          localCache: {
-            whisperDeleted: localCacheDeleted,
-            audioDeleted: localAudioDeleted
-          },
-          s3Cache: s3Results,
-          summary: {
-            totalFilesDeleted: (localCacheDeleted ? 1 : 0) + 
-                              (localAudioDeleted ? 1 : 0) + 
-                              (s3Results.audioDeleted ? 1 : 0) + 
-                              (s3Results.whisperDeleted ? 1 : 0)
-          }
-        };
-        
-        console.log(`✅ Cache cleanup completed for ${videoId}:`, cacheResults.summary);
-        
+        cacheResults = { transcriptDeleted: deleted };
       } catch (cacheError) {
-        console.error(`❌ Cache cleanup failed for ${videoId}:`, cacheError);
-        cacheResults = {
-          error: cacheError.message,
-          localCache: { whisperDeleted: false, audioDeleted: false },
-          s3Cache: { audioDeleted: false, whisperDeleted: false }
-        };
+        console.error(`❌ Cache cleanup failed for ${videoId}:`, cacheError.message);
+        cacheResults = { error: cacheError.message, transcriptDeleted: false };
       }
     }
     

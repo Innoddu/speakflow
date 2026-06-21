@@ -15,8 +15,8 @@ const getBaseUrl = () => {
       return 'http://localhost:5030/api';
     }
   } else {
-    // Production environment (Railway URL)
-    return 'https://speakflow-backend-production.up.railway.app/api';
+    // Production environment (Render URL)
+    return 'https://speakflow-ua78.onrender.com/api';
   }
 };
 

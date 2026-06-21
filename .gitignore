@@ -39,3 +39,6 @@ yarn-error.log*
 **/android/app/build/
 *.keystore
 !debug.keystore
+
+# CI 워크플로는 workflow 스코프 토큰으로 별도 푸시
+.github/workflows/
