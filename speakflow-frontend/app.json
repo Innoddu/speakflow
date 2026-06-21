@@ -40,9 +40,6 @@
       "themeColor": "#4285f4",
       "backgroundColor": "#ffffff"
     },
-    "plugins": [
-      "expo-audio"
-    ],
     "permissions": [
       "RECORD_AUDIO",
       "MODIFY_AUDIO_SETTINGS"
