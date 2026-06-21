@@ -1,0 +1,2 @@
+# Ignore secret scanning false positives from third-party libraries
+node_modules/@react-native/debugger-frontend/

@@ -1,0 +1,12 @@
+[phases.setup]
+nixPkgs = ["nodejs_20", "python3", "python3Packages.pip", "python3Packages.yt-dlp", "ffmpeg"]
+
+[phases.build]
+cmds = [
+  "npm install",
+  "pip3 install --break-system-packages yt-dlp spacy youtube-transcript-api",
+  "python3 -m spacy download en_core_web_sm"
+]
+
+[phases.start]
+cmd = "npm start" 
