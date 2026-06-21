@@ -63,8 +63,10 @@ async function transcribeYouTubeVideo(videoId) {
             {
               text:
                 'Transcribe the spoken English in this video into natural, short sentences ' +
-                '(one spoken sentence each). Return JSON: ' +
-                '{"sentences":[{"text":"...","start":<seconds as number>}]}. ' +
+                '(one spoken sentence each). ' +
+                'Skip standalone filler interjections that are a single word (e.g., "Yes.", "Yeah.", "Okay.", "Uh.", "Right.", "Mm-hmm."); ' +
+                'either merge them into the adjacent sentence or omit them. ' +
+                'Return JSON: {"sentences":[{"text":"...","start":<seconds as number>}]}. ' +
                 'start = the time (in seconds) when the sentence begins.',
             },
           ],

@@ -10,6 +10,16 @@ const { transcribeYouTubeVideo, handleGeminiError } = require('../services/gemin
 const cacheDir = path.join(__dirname, '..', 'data', 'transcripts');
 fs.mkdirSync(cacheDir, { recursive: true });
 
+// 단어 수 (구두점 제외)
+function wordCount(text) {
+  return text.trim().replace(/[^\w\s']/g, ' ').split(/\s+/).filter(Boolean).length;
+}
+
+// 학습 가치가 있는 문장인가 (한 단어짜리 필러 제외: yes, yeah, okay 등)
+function isMeaningful(text) {
+  return wordCount(text) >= 2;
+}
+
 // 문장 길이로 마지막 문장 재생시간 추정
 function estimateDuration(text) {
   const words = text.trim().split(/\s+/).length;
@@ -31,16 +41,16 @@ router.get('/youtube-subtitles/:videoId', async (req, res) => {
   const cacheFile = path.join(cacheDir, `${videoId}.json`);
 
   try {
-    // 1) 캐시 확인
+    // 1) 캐시 확인 (한 단어짜리 필러는 응답 시 한 번 더 거른다 — 과거 캐시 대비)
     if (fs.existsSync(cacheFile)) {
-      const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+      const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8')).filter((s) => isMeaningful(s.text));
       console.log(`⚡ Transcript cache hit: ${videoId} (${cached.length} sentences)`);
       return res.json({ success: true, source: 'gemini-cache', sentences: cached });
     }
 
     // 2) Gemini로 영상 전사
     console.log(`🎬 Transcribing ${videoId} with Gemini...`);
-    const raw = await transcribeYouTubeVideo(videoId);
+    const raw = (await transcribeYouTubeVideo(videoId)).filter((s) => isMeaningful(s.text));
 
     if (!raw.length) {
       return res.status(404).json({
