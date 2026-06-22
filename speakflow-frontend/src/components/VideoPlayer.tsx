@@ -95,17 +95,25 @@ const WebVideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) => {
 // ── 네이티브: WebView + YouTube IFrame API (injectJavaScript 제어) ───
 const NativeVideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) => {
   const webViewRef = useRef<WebView>(null);
+  const lastTimeRef = useRef(0);
 
   const run = (js: string) => {
     webViewRef.current?.injectJavaScript(js + '; true;');
   };
 
   useImperativeHandle(ref, () => ({
-    seekTo: (t: number) => run(`if(window.player&&player.seekTo){player.seekTo(${Math.max(0, Math.floor(t))}, true);}`),
+    seekTo: (t: number) => run(`if(window.player&&player.seekTo){player.seekTo(${Math.max(0, t)}, true);}`),
     play: () => run('if(window.player&&player.playVideo){player.playVideo();}'),
     pause: () => run('if(window.player&&player.pauseVideo){player.pauseVideo();}'),
-    getCurrentTime: (cb: (time: number) => void) => cb(0),
+    getCurrentTime: (cb: (time: number) => void) => cb(lastTimeRef.current),
   }));
+
+  const onMessage = (e: any) => {
+    const m = e?.nativeEvent?.data;
+    if (typeof m === 'string' && m.startsWith('TIME:')) {
+      lastTimeRef.current = parseFloat(m.slice(5)) || 0;
+    }
+  };
 
   const html = `
     <!DOCTYPE html>
@@ -121,7 +129,16 @@ const NativeVideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) =
         function onYouTubeIframeAPIReady() {
           window.player = new YT.Player('player', {
             videoId: '${videoId}',
-            playerVars: { autoplay: 0, controls: 1, rel: 0, modestbranding: 1, playsinline: 1 }
+            playerVars: { autoplay: 0, controls: 1, rel: 0, modestbranding: 1, playsinline: 1 },
+            events: {
+              'onReady': function() {
+                setInterval(function() {
+                  if (window.player && player.getCurrentTime) {
+                    window.ReactNativeWebView.postMessage('TIME:' + player.getCurrentTime());
+                  }
+                }, 200);
+              }
+            }
           });
         }
       </script>
@@ -136,6 +153,7 @@ const NativeVideoPlayer = forwardRef<VideoPlayerRef, Props>(({ videoId }, ref) =
         javaScriptEnabled
         domStorageEnabled
         source={{ html }}
+        onMessage={onMessage}
         allowsFullscreenVideo
         allowsInlineMediaPlayback
         mediaPlaybackRequiresUserAction={false}

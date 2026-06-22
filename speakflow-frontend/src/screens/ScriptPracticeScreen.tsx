@@ -69,7 +69,7 @@ export default function ScriptPracticeScreen() {
 
     return () => {
       if (sentenceTimerRef.current) {
-        clearTimeout(sentenceTimerRef.current);
+        clearInterval(sentenceTimerRef.current);
         sentenceTimerRef.current = null;
       }
     };
@@ -150,25 +150,59 @@ export default function ScriptPracticeScreen() {
   const stopPlayback = () => {
     if (videoPlayerRef.current) videoPlayerRef.current.pause();
     if (sentenceTimerRef.current) {
-      clearTimeout(sentenceTimerRef.current);
+      clearInterval(sentenceTimerRef.current);
       sentenceTimerRef.current = null;
     }
     setIsPlaying(false);
   };
 
   // 해당 문장 구간을 YouTube 임베드 플레이어로 재생한다.
+  // 고정 타이머가 아니라 "실제 재생 위치"를 보고 멈춘다 → seek/버퍼링 지연에 안전.
   const playSentence = (sentence: PracticeSentence) => {
-    if (!videoPlayerRef.current) return;
+    const player = videoPlayerRef.current;
+    if (!player) return;
 
     setIsPlaying(true);
-    videoPlayerRef.current.seekTo(sentence.start);
-    videoPlayerRef.current.play();
+    player.seekTo(sentence.start);
+    player.play();
 
-    const paddingMs = 250;
-    sentenceTimerRef.current = setTimeout(() => {
-      videoPlayerRef.current?.pause();
-      setIsPlaying(false);
-    }, sentence.duration * 1000 + paddingMs);
+    let entered = false; // 해당 구간에 실제로 진입했는지(seek 반영 확인)
+    const startedAt = Date.now();
+
+    const interval = setInterval(() => {
+      const p = videoPlayerRef.current;
+      if (!p) {
+        clearInterval(interval);
+        return;
+      }
+      p.getCurrentTime((t) => {
+        const elapsed = Date.now() - startedAt;
+
+        if (!entered) {
+          // seek가 반영되어 구간 안으로 들어왔는지 확인
+          if (t >= sentence.start - 1 && t < sentence.end + 2) {
+            entered = true;
+          } else if (elapsed > 12000) {
+            // 12초 내 진입 못하면 안전 정지
+            p.pause();
+            setIsPlaying(false);
+            clearInterval(interval);
+            sentenceTimerRef.current = null;
+          }
+          return;
+        }
+
+        // 구간 끝에 도달하면 정지
+        if (t >= sentence.end) {
+          p.pause();
+          setIsPlaying(false);
+          clearInterval(interval);
+          sentenceTimerRef.current = null;
+        }
+      });
+    }, 150);
+
+    sentenceTimerRef.current = interval;
   };
 
   // 문장 탭: 재생 중이면 멈추고, 아니면 그 문장을 재생한다.
