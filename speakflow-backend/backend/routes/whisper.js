@@ -1,10 +1,11 @@
-// 스크립트(자막) 생성 라우트 — Gemini 영상 전사 기반.
-// 클라우드 IP 차단 없이 동작하며, 결과는 로컬에 캐시한다.
+// 스크립트(자막) 생성 라우트.
+// Supadata(정확한 타임스탬프) 우선, 없으면 Gemini 폴백. 결과는 로컬 캐시.
 const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
-const { transcribeYouTubeVideo, handleGeminiError } = require('../services/gemini');
+const { getTranscript } = require('../services/transcript');
+const { handleGeminiError } = require('../services/gemini');
 
 // 전사 캐시 디렉터리
 const cacheDir = path.join(__dirname, '..', 'data', 'transcripts');
@@ -20,39 +21,28 @@ function isMeaningful(text) {
   return wordCount(text) >= 2;
 }
 
-// 문장 길이로 마지막 문장 재생시간 추정
-function estimateDuration(text) {
-  const words = text.trim().split(/\s+/).length;
-  return Math.max(1.2, words / 2.5); // ~2.5 words/sec
-}
-
-// {text,start}[] → {text,start,end,duration}[]  (end = 다음 문장 시작)
-function withTiming(sentences) {
-  return sentences.map((s, i) => {
-    const start = s.start;
-    const end = i < sentences.length - 1 ? sentences[i + 1].start : start + estimateDuration(s.text);
-    return { text: s.text, start, end, duration: Math.max(0.5, end - start) };
-  });
-}
-
 // GET /youtube-subtitles/:videoId — 프론트엔드가 사용하는 스크립트 생성 엔드포인트
 router.get('/youtube-subtitles/:videoId', async (req, res) => {
   const { videoId } = req.params;
   const cacheFile = path.join(cacheDir, `${videoId}.json`);
 
   try {
-    // 1) 캐시 확인 (한 단어짜리 필러는 응답 시 한 번 더 거른다 — 과거 캐시 대비)
+    // 1) 캐시 확인 (옛 배열 포맷도 호환, 한 단어짜리 필러는 응답 시 거른다)
     if (fs.existsSync(cacheFile)) {
-      const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8')).filter((s) => isMeaningful(s.text));
-      console.log(`⚡ Transcript cache hit: ${videoId} (${cached.length} sentences)`);
-      return res.json({ success: true, source: 'gemini-cache', sentences: cached });
+      const data = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+      const arr = Array.isArray(data) ? data : data.sentences || [];
+      const src = Array.isArray(data) ? 'cache' : data.source;
+      const sentences = arr.filter((s) => isMeaningful(s.text));
+      console.log(`⚡ Transcript cache hit: ${videoId} (${sentences.length} sentences, ${src})`);
+      return res.json({ success: true, source: src + '-cache', sentences });
     }
 
-    // 2) Gemini로 영상 전사
-    console.log(`🎬 Transcribing ${videoId} with Gemini...`);
-    const raw = (await transcribeYouTubeVideo(videoId)).filter((s) => isMeaningful(s.text));
+    // 2) Supadata 또는 Gemini로 전사
+    console.log(`🎬 Getting transcript for ${videoId}...`);
+    const { sentences: all, source } = await getTranscript(videoId);
+    const sentences = all.filter((s) => isMeaningful(s.text));
 
-    if (!raw.length) {
+    if (!sentences.length) {
       return res.status(404).json({
         success: false,
         error: 'Transcription failed',
@@ -61,15 +51,14 @@ router.get('/youtube-subtitles/:videoId', async (req, res) => {
       });
     }
 
-    const sentences = withTiming(raw);
     try {
-      fs.writeFileSync(cacheFile, JSON.stringify(sentences));
+      fs.writeFileSync(cacheFile, JSON.stringify({ source, sentences }));
     } catch (e) {
       console.warn('⚠️ Failed to write transcript cache:', e.message);
     }
 
-    console.log(`✅ Transcribed ${videoId}: ${sentences.length} sentences`);
-    return res.json({ success: true, source: 'gemini', sentences });
+    console.log(`✅ Transcript ready (${source}): ${sentences.length} sentences`);
+    return res.json({ success: true, source, sentences });
   } catch (error) {
     console.error('❌ Transcription error:', error.message);
     return handleGeminiError(error, res, 'Transcription failed');
